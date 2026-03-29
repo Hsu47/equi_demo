@@ -183,14 +183,102 @@ def score_fund(fund: dict) -> dict:
     }
 
 
+def undiscovered_gem_flag(sharpe: float, aum_mm: Optional[float],
+                          composite: float) -> bool:
+    """
+    Equi's real moat: finding exceptional managers BEFORE they're famous.
+
+    A fund is flagged as an 'undiscovered gem' when it has strong risk-adjusted
+    performance but low AUM — meaning institutional capital hasn't found it yet.
+    These are Equi's highest-value targets: better fee negotiation, first-mover
+    allocation advantage, and asymmetric upside as AUM grows.
+
+    Criteria: composite_score ≥ 70 AND AUM < $300M (under the institutional radar)
+    """
+    if aum_mm is None:
+        return False
+    return composite >= 70 and aum_mm < 300
+
+
+def portfolio_analytics(recommended: List[dict]) -> dict:
+    """
+    Equi's core product insight: individual fund quality matters less than
+    how funds combine. Two Sharpe-2 funds with 0.9 correlation add no value.
+
+    Computes for the RECOMMEND-tier portfolio:
+      - Fund-to-fund correlation matrix
+      - Equal-weight portfolio monthly returns
+      - Portfolio Sharpe vs SPY Sharpe (the actual pitch to investors)
+      - Portfolio Max Drawdown vs SPY Max Drawdown
+    """
+    if not recommended:
+        return {}
+
+    names = [f["name"] for f in recommended]
+    returns_matrix = [f["monthly_returns"] for f in recommended]
+    n = len(recommended)
+
+    # Fund-to-fund correlation matrix
+    corr_matrix = {}
+    for i in range(n):
+        for j in range(n):
+            key = f"{names[i][:12]} × {names[j][:12]}"
+            corr_matrix[key] = round(pearson_correlation(
+                returns_matrix[i], returns_matrix[j]), 3)
+
+    # Equal-weight portfolio returns
+    months = len(returns_matrix[0])
+    port_returns = [
+        sum(returns_matrix[f][m] for f in range(n)) / n
+        for m in range(months)
+    ]
+
+    # SPY returns (same period, from transform module)
+    spy = recommended[0]["market_returns"]
+
+    port_sharpe = sharpe_ratio([r - 0.05/12 for r in port_returns])
+    spy_sharpe  = sharpe_ratio([r - 0.05/12 for r in spy])
+
+    port_nav = [100.0]
+    for r in port_returns:
+        port_nav.append(port_nav[-1] * (1 + r))
+    spy_nav = [100.0]
+    for r in spy:
+        spy_nav.append(spy_nav[-1] * (1 + r))
+
+    port_dd  = max_drawdown(port_nav)
+    spy_dd   = max_drawdown(spy_nav)
+
+    ann_port = (port_nav[-1] / 100.0) - 1   # total return over 12 months
+    ann_spy  = (spy_nav[-1]  / 100.0) - 1
+
+    return {
+        "funds_in_portfolio": names,
+        "correlation_matrix": corr_matrix,
+        "portfolio_annual_return": round(ann_port * 100, 2),
+        "spy_annual_return":       round(ann_spy  * 100, 2),
+        "portfolio_sharpe":  round(port_sharpe, 3),
+        "spy_sharpe":        round(spy_sharpe,  3),
+        "portfolio_max_dd":  round(port_dd, 4),
+        "spy_max_dd":        round(spy_dd,  4),
+    }
+
+
 def score_all(transformed_funds: List[dict]) -> List[dict]:
-    """Score all funds and return them sorted by Sharpe ratio (descending)."""
+    """Score all funds, flag undiscovered gems, sort by composite score."""
     scored = [score_fund(f) for f in transformed_funds]
-    scored.sort(key=lambda f: f["sharpe_ratio"], reverse=True)
+
+    # Tag undiscovered gems after scoring
+    for f in scored:
+        f["gem"] = undiscovered_gem_flag(
+            f["sharpe_ratio"], f.get("aum_mm"), f["composite_score"])
+
+    scored.sort(key=lambda f: f["composite_score"], reverse=True)
     print(f"[score] Scored {len(scored)} funds | "
           f"RECOMMEND={sum(1 for f in scored if f['recommendation']=='RECOMMEND')} | "
           f"WATCHLIST={sum(1 for f in scored if f['recommendation']=='WATCHLIST')} | "
-          f"PASS={sum(1 for f in scored if f['recommendation']=='PASS')}")
+          f"PASS={sum(1 for f in scored if f['recommendation']=='PASS')} | "
+          f"GEMS={sum(1 for f in scored if f.get('gem'))}")
     return scored
 
 
@@ -201,7 +289,7 @@ def score_all(transformed_funds: List[dict]) -> List[dict]:
 OUTPUT_COLUMNS = [
     "rank", "fund_id", "name", "source_format", "aum_mm",
     "annualized_return", "sharpe_ratio", "max_drawdown",
-    "sortino_ratio", "market_correlation", "composite_score", "recommendation",
+    "sortino_ratio", "market_correlation", "composite_score", "recommendation", "gem",
 ]
 
 
