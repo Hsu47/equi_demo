@@ -42,7 +42,7 @@ def print_table(scored_funds) -> None:
     """Pretty-print the top results to stdout."""
     header = (
         f"{'Rank':<5} {'Fund':<25} {'Ann.Ret%':>8} {'Sharpe':>7} "
-        f"{'MaxDD':>7} {'Sortino':>8} {'Corr':>6} {'Signal':<12}"
+        f"{'MaxDD':>7} {'Sortino':>8} {'Corr':>6} {'Score':>6} {'Signal':<12}"
     )
     divider = "-" * len(header)
     print(divider)
@@ -59,6 +59,7 @@ def print_table(scored_funds) -> None:
             f"{f['max_drawdown']:>7.3f} "
             f"{f['sortino_ratio']:>8.3f} "
             f"{f['market_correlation']:>6.3f} "
+            f"{f['composite_score']:>6.1f} "
             f"{rec_icon} {f['recommendation']}"
         )
     print(divider)

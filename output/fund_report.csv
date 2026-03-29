@@ -1,11 +1,11 @@
-rank,fund_id,name,source_format,aum_mm,annualized_return,sharpe_ratio,max_drawdown,sortino_ratio,market_correlation,recommendation
-1,FUND_I,Invictus Merger Arb,dict,340,23.74,15.0,0.0,99.9,0.3238,RECOMMEND
-2,FUND_C,Citadel Quant Arb,json,880,13.32,2.9247,-0.004,6.9947,0.1251,RECOMMEND
-3,FUND_F,Fortress Credit Opp,csv,,19.08,2.5644,-0.011,6.0221,-0.4276,RECOMMEND
-4,FUND_A,Apex Global Macro,json,420,18.29,1.5281,-0.021,3.2761,0.1041,RECOMMEND
-5,FUND_B,BlueCrest Systematic,json,210,14.75,1.197,-0.031,2.0869,-0.0391,RECOMMEND
-6,FUND_G,GreenLight Value,dict,155,18.75,0.863,-0.041,1.7235,-0.2678,RECOMMEND
-7,FUND_J,Jupiter Distressed,dict,200,28.47,0.8206,-0.071,1.6241,-0.1776,RECOMMEND
-8,FUND_E,Elm Street Alpha,csv,,20.36,0.786,-0.055,1.5297,0.2905,RECOMMEND
-9,FUND_D,Dalio All Weather,csv,,6.05,0.5255,-0.003,0.8304,0.0033,RECOMMEND
-10,FUND_H,Harbor Volatility,dict,75,2.01,-2.8628,-0.003,-2.2901,0.0403,PASS
+rank,fund_id,name,source_format,aum_mm,annualized_return,sharpe_ratio,max_drawdown,sortino_ratio,market_correlation,composite_score,recommendation
+1,FUND_I,Invictus Merger Arb,dict,340,23.74,15.0,0.0,99.9,0.3238,93.5,RECOMMEND
+2,FUND_C,Citadel Quant Arb,json,880,13.32,2.9247,-0.004,6.9947,0.1251,96.2,RECOMMEND
+3,FUND_F,Fortress Credit Opp,csv,,19.08,2.5644,-0.011,6.0221,-0.4276,84.7,RECOMMEND
+4,FUND_A,Apex Global Macro,json,420,18.29,1.5281,-0.021,3.2761,0.1041,71.4,RECOMMEND
+5,FUND_B,BlueCrest Systematic,json,210,14.75,1.197,-0.031,2.0869,-0.0391,63.9,WATCHLIST
+6,FUND_G,GreenLight Value,dict,155,18.75,0.863,-0.041,1.7235,-0.2678,52.9,WATCHLIST
+7,FUND_J,Jupiter Distressed,dict,200,28.47,0.8206,-0.071,1.6241,-0.1776,51.3,WATCHLIST
+8,FUND_E,Elm Street Alpha,csv,,20.36,0.786,-0.055,1.5297,0.2905,49.7,PASS
+9,FUND_D,Dalio All Weather,csv,,6.05,0.5255,-0.003,0.8304,0.0033,54.2,PASS
+10,FUND_H,Harbor Volatility,dict,75,2.01,-2.8628,-0.003,-2.2901,0.0403,43.9,PASS

@@ -96,24 +96,61 @@ def pearson_correlation(x: List[float], y: List[float]) -> float:
 # Recommendation logic
 # ---------------------------------------------------------------------------
 
+def composite_score(sharpe: float,
+                    drawdown: float,
+                    sortino: float,
+                    correlation: float,
+                    aum_mm: Optional[float]) -> float:
+    """
+    Weighted composite score (0–100) reflecting Equi's allocation priorities:
+      40% Sharpe   — core risk-adjusted return quality (capped at Sharpe=3 → 100%)
+      25% Drawdown — capital preservation (0% DD = 100 pts, -30% DD = 0 pts)
+      20% Low correlation — diversification value (0 corr = 100 pts, 1 corr = 0 pts)
+      15% Sortino  — asymmetric upside vs downside (capped at Sortino=5)
+
+    AUM below $50M applies a 15-point illiquidity penalty (institutional investability).
+    """
+    sharpe_score = min(sharpe / 3.0, 1.0) * 100 if sharpe > 0 else 0.0
+    dd_score = max(0.0, (1 + drawdown / 0.30)) * 100       # -30% DD → 0 pts
+    corr_score = (1 - abs(correlation)) * 100
+    sortino_cap = min(sortino, 5.0) if sortino != 99.9 else 5.0
+    sortino_score = (sortino_cap / 5.0) * 100 if sortino_cap > 0 else 0.0
+
+    raw = (0.40 * sharpe_score +
+           0.25 * dd_score +
+           0.20 * corr_score +
+           0.15 * sortino_score)
+
+    # Illiquidity penalty for sub-scale funds
+    if aum_mm is not None and aum_mm < 50:
+        raw -= 15
+
+    return round(max(0.0, min(100.0, raw)), 1)
+
+
 def recommend(sharpe: float,
               drawdown: float,
-              correlation: float) -> str:
+              correlation: float,
+              score: float) -> str:
     """
-    Simple rule-based recommendation based on Equi's stated investment thesis:
-      1. Risk-adjusted return must clear a minimum bar (Sharpe ≥ 0.5)
-      2. Drawdown must be controlled (max_dd ≥ -0.20)
-      3. Must offer genuine diversification (abs correlation ≤ 0.60)
+    Tiered recommendation based on composite score AND hard risk floors.
 
-    Returns 'RECOMMEND', 'WATCHLIST', or 'PASS'.
+    Equi's stated thesis: find managers with high risk-adjusted returns AND
+    genuine diversification value. The bar is intentionally high — only
+    exceptional managers should reach RECOMMEND.
+
+      RECOMMEND  — score ≥ 70 AND Sharpe ≥ 1.0 AND MaxDD ≥ -15% AND |Corr| ≤ 0.50
+      WATCHLIST  — score ≥ 50 AND Sharpe ≥ 0.6 AND MaxDD ≥ -25%
+      PASS       — everything else (the majority — by design)
     """
-    passes_sharpe = sharpe >= 0.5
-    passes_drawdown = drawdown >= -0.20
-    passes_correlation = abs(correlation) <= 0.60
-
-    if passes_sharpe and passes_drawdown and passes_correlation:
+    passes_hard_floors = (
+        sharpe >= 1.0 and
+        drawdown >= -0.15 and
+        abs(correlation) <= 0.50
+    )
+    if score >= 70 and passes_hard_floors:
         return "RECOMMEND"
-    elif sharpe >= 0.3 and drawdown >= -0.30:
+    elif score >= 50 and sharpe >= 0.6 and drawdown >= -0.25:
         return "WATCHLIST"
     else:
         return "PASS"
@@ -125,19 +162,22 @@ def recommend(sharpe: float,
 
 def score_fund(fund: dict) -> dict:
     """Score a single transformed fund record. Returns the fund dict enriched
-    with all quantitative metrics and a final recommendation."""
+    with all quantitative metrics, a composite score, and a final recommendation."""
     sr = sharpe_ratio(fund["excess_returns"])
     dd = max_drawdown(fund["nav_curve"])
     so = sortino_ratio(fund["monthly_returns"])
+    so_display = round(so, 4) if so != float("inf") else 99.9
     corr = pearson_correlation(fund["monthly_returns"], fund["market_returns"])
-    rec = recommend(sr, dd, corr)
+    cscore = composite_score(sr, dd, so_display, corr, fund.get("aum_mm"))
+    rec = recommend(sr, dd, corr, cscore)
 
     return {
         **fund,
         "sharpe_ratio": round(sr, 4),
         "max_drawdown": round(dd, 4),
-        "sortino_ratio": round(so, 4) if so != float("inf") else 99.9,
+        "sortino_ratio": so_display,
         "market_correlation": round(corr, 4),
+        "composite_score": cscore,
         "annualized_return": round(fund["annualized_return"] * 100, 2),  # as %
         "recommendation": rec,
     }
@@ -161,7 +201,7 @@ def score_all(transformed_funds: List[dict]) -> List[dict]:
 OUTPUT_COLUMNS = [
     "rank", "fund_id", "name", "source_format", "aum_mm",
     "annualized_return", "sharpe_ratio", "max_drawdown",
-    "sortino_ratio", "market_correlation", "recommendation",
+    "sortino_ratio", "market_correlation", "composite_score", "recommendation",
 ]
 
 
