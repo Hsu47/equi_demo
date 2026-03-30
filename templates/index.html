@@ -42,6 +42,7 @@
     .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; text-align: center; }
     .kpi .val { font-size: 2rem; font-weight: 700; color: #fff; }
     .kpi .lbl { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+    .kpi .sub { font-size: 0.68rem; color: var(--muted); margin-top: 3px; opacity: 0.7; }
 
     /* ── Fund table ── */
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
@@ -114,12 +115,28 @@
 
 <div class="wrap">
 
-  <!-- KPIs -->
+  <!-- KPIs — framed as business outcomes, not technical metrics -->
   <div class="kpi-row" id="kpi-row">
-    <div class="kpi"><div class="val" id="k-total">–</div><div class="lbl">Funds Evaluated</div></div>
-    <div class="kpi"><div class="val" style="color:var(--green)" id="k-rec">–</div><div class="lbl">RECOMMEND</div></div>
-    <div class="kpi"><div class="val" style="color:var(--accent)" id="k-psharpe">–</div><div class="lbl">Portfolio Sharpe</div></div>
-    <div class="kpi"><div class="val" style="color:var(--muted)" id="k-ssharpe">–</div><div class="lbl">SPY Sharpe</div></div>
+    <div class="kpi">
+      <div class="val" style="color:var(--green)" id="k-fee-savings">–</div>
+      <div class="lbl">Fee Savings · $1M · 5yr</div>
+      <div class="sub">vs standard 2/20 — Equi negotiates 50–60% off</div>
+    </div>
+    <div class="kpi">
+      <div class="val" style="color:var(--accent)" id="k-sharpe-mult">–</div>
+      <div class="lbl">Portfolio Sharpe vs SPY</div>
+      <div class="sub">risk-adjusted edge from uncorrelated managers</div>
+    </div>
+    <div class="kpi">
+      <div class="val" style="color:var(--gem)" id="k-gems">–</div>
+      <div class="lbl">Undiscovered Gems</div>
+      <div class="sub">high score · AUM &lt; $300M · pre-institutional</div>
+    </div>
+    <div class="kpi">
+      <div class="val" style="color:var(--green)" id="k-rec">–</div>
+      <div class="lbl">RECOMMEND</div>
+      <div class="sub">out of <span id="k-total">–</span> funds evaluated</div>
+    </div>
   </div>
 
   <!-- Fund Ranking Table -->
@@ -213,6 +230,7 @@ function scoreBar(score) {
 fetch('/api/funds').then(r => r.json()).then(funds => {
   document.getElementById('k-total').textContent = funds.length;
   document.getElementById('k-rec').textContent   = funds.filter(f => f.rec === 'RECOMMEND').length;
+  document.getElementById('k-gems').textContent  = funds.filter(f => f.gem).length || '0';
 
   const tbody = document.getElementById('fund-tbody');
   funds.forEach(f => {
@@ -240,8 +258,8 @@ fetch('/api/portfolio').then(r => r.json()).then(d => {
   if (!d.funds) return;
 
   // KPIs
-  document.getElementById('k-psharpe').textContent = d.port_sharpe.toFixed(2);
-  document.getElementById('k-ssharpe').textContent = d.spy_sharpe.toFixed(2);
+  document.getElementById('k-sharpe-mult').textContent =
+    (d.port_sharpe / d.spy_sharpe).toFixed(1) + '×';
 
   // Compare grid
   const metrics = [
@@ -314,6 +332,7 @@ fetch('/api/portfolio').then(r => r.json()).then(d => {
 // ── Fee Arbitrage ─────────────────────────────────────────────────────────────
 fetch('/api/fee_arbitrage').then(r => r.json()).then(d => {
   const fmt = v => '$' + (v/1000).toFixed(0) + 'K';
+  document.getElementById('k-fee-savings').textContent = fmt(d.fee_savings_5yr);
   document.getElementById('fee-stats').innerHTML = `
     <div class="fee-stat">
       <div class="val" style="color:var(--muted)">${fmt(d.standard_curve.at(-1))}</div>
