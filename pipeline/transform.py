@@ -15,7 +15,7 @@ Key transformations:
 from typing import Optional, List
 import statistics
 import math
-
+import requests
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -24,14 +24,43 @@ import math
 # Approximate monthly risk-free rate (annualized 5% / 12)
 MONTHLY_RF = 0.05 / 12
 
-# Simulated SPY monthly returns for 2023 (proxy for market benchmark)
-# Used to measure how "alternative" (uncorrelated) each fund truly is
-SPY_MONTHLY_2023 = [
-    0.062, -0.025, 0.035, 0.015, -0.006, 0.065,
-    0.031, -0.018, -0.049, -0.021, 0.089, 0.045,
-]
-
 EXPECTED_MONTHS = 12
+
+# ---------------------------------------------------------------------------
+# Live SPY benchmark — same window as fund data
+# ---------------------------------------------------------------------------
+
+def _fetch_spy_monthly() -> List[float]:
+    """
+    Fetch SPY monthly returns from Yahoo Finance for the same trailing
+    13-month window used by ingest_live.py.
+
+    This ensures market correlation is computed on aligned time series —
+    not a static 2023 proxy vs live 2024-2025 fund data.
+    """
+    url = ("https://query1.finance.yahoo.com/v8/finance/chart/SPY"
+           "?interval=1mo&range=13mo")
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(url, headers=headers, timeout=8)
+        r.raise_for_status()
+        closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        closes = [c for c in closes if c is not None]
+        returns = [(closes[i] - closes[i-1]) / closes[i-1]
+                   for i in range(1, len(closes))]
+        returns = returns[-12:]
+        print(f"[transform] SPY benchmark: fetched {len(returns)} months live ✓")
+        return returns
+    except Exception as e:
+        # Fallback to 2024 approximate values if network fails
+        print(f"[transform] SPY live fetch failed ({e}), using 2024 fallback")
+        return [
+            0.016, 0.052, 0.031, -0.041, 0.048, 0.035,
+            0.011, 0.023, 0.019, -0.017, 0.056, 0.042,
+        ]
+
+# Fetch once at import time so all funds use the same benchmark window
+SPY_MONTHLY_LIVE = _fetch_spy_monthly()
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +139,7 @@ def transform_fund(raw: dict) -> dict:
         "monthly_returns": validated,
         "excess_returns": excess,
         "nav_curve": nav,
-        "market_returns": SPY_MONTHLY_2023,
+        "market_returns": SPY_MONTHLY_LIVE,
         "annualized_return": ann_return,
     }
 

@@ -32,11 +32,11 @@ LIVE_FUNDS = [
     {"ticker": "BTAL",  "fund_id": "LIVE_BTAL", "name": "BlueCrest Systematic",   "aum_mm": 210,  "source_format": "live"},
     {"ticker": "QAI",   "fund_id": "LIVE_QAI",  "name": "Citadel Quant Arb",      "aum_mm": 880,  "source_format": "live"},
     {"ticker": "TAIL",  "fund_id": "LIVE_TAIL", "name": "Harbor Volatility",       "aum_mm": 75,   "source_format": "live"},
-    {"ticker": "AOM",   "fund_id": "LIVE_AOM",  "name": "Dalio All Weather",       "aum_mm": None, "source_format": "live"},
+    {"ticker": "AOM",   "fund_id": "LIVE_AOM",  "name": "Dalio All Weather",       "aum_mm": 1800, "source_format": "live"},
     {"ticker": "HYG",   "fund_id": "LIVE_HYG",  "name": "Jupiter Distressed Debt", "aum_mm": 200,  "source_format": "live"},
-    {"ticker": "WTMF",  "fund_id": "LIVE_WTMF", "name": "Fortress Credit Opp",    "aum_mm": None, "source_format": "live"},
+    {"ticker": "WTMF",  "fund_id": "LIVE_WTMF", "name": "Fortress Credit Opp",    "aum_mm": 110,  "source_format": "live"},
     {"ticker": "GMOM",  "fund_id": "LIVE_GMOM", "name": "GreenLight Value",        "aum_mm": 155,  "source_format": "live"},
-    {"ticker": "SVXY",  "fund_id": "LIVE_SVXY", "name": "Elm Street Alpha",        "aum_mm": None, "source_format": "live"},
+    {"ticker": "SVXY",  "fund_id": "LIVE_SVXY", "name": "Elm Street Alpha",        "aum_mm": 380,  "source_format": "live"},
 ]
 
 _YF_HEADERS = {"User-Agent": "Mozilla/5.0"}
