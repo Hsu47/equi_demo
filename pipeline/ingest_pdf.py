@@ -115,28 +115,83 @@ def _derive_ticker(fund_name: str, file_path: str) -> str:
 def _find_aum(text: str):
     """
     Extract ending NAV / AUM from text.
-    Handles both single-line ("Ending NAV ... $2,660,284.00") and
-    line-continuation cases where the $ amount is on the next line.
+    Handles:
+      - "$2,660,284.00"  (standard)
+      - "$2.66M" / "$2.66 million"  (abbreviated)
+      - "$2.66B" / "$2.66 billion"  (abbreviated)
+      - "2,660,284 USD"  (no $ prefix, USD suffix)
+      - "NAV: 2,660,284"  (bare number on same or next line)
+      - Line-continuation where $ amount is on the next line
     """
     lines = text.splitlines()
+
+    def _try_parse_amount(search_text):
+        """Try multiple AUM formats on a text string. Returns value in millions or None."""
+        # Format 1: $X.XXM / $X.XX million
+        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
+        if m:
+            try:
+                return round(float(m.group(1).replace(",", "")), 2)
+            except ValueError:
+                pass
+        # Format 2: $X.XXB / $X.XX billion
+        m = re.search(r"\$([\d,.]+)\s*[Bb](?:illion)?", search_text)
+        if m:
+            try:
+                return round(float(m.group(1).replace(",", "")) * 1000, 2)
+            except ValueError:
+                pass
+        # Format 3: $X,XXX,XXX.XX (standard dollar amount)
+        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", ""))
+                if val > 100_000:
+                    return round(val / 1_000_000, 2)
+            except ValueError:
+                pass
+        # Format 4: X,XXX,XXX USD
+        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", ""))
+                if val > 100_000:
+                    return round(val / 1_000_000, 2)
+            except ValueError:
+                pass
+        # Format 5: bare large number (no currency symbol)
+        m = re.search(r"(?<!\d)([\d,]{7,}(?:\.\d{1,2})?)(?!\d)", search_text)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", ""))
+                if val > 100_000:
+                    return round(val / 1_000_000, 2)
+            except ValueError:
+                pass
+        return None
+
     for i, line in enumerate(lines):
         line_l = line.lower()
         if any(lbl in line_l for lbl in _AUM_LABELS):
-            # Try current line first
-            m = re.search(r"\$([\d,]+(?:\.\d{2})?)", line)
-            # If not found, try the next line (line-continuation from pdfplumber)
-            if not m and i + 1 < len(lines):
-                m = re.search(r"\$([\d,]+(?:\.\d{2})?)", lines[i + 1])
-            # Also try: label line ends with $ and amount is at start of next line
-            if not m and line.rstrip().endswith("$") and i + 1 < len(lines):
+            # Try current line
+            result = _try_parse_amount(line)
+            if result is not None:
+                return result
+            # Try next line (line-continuation from pdfplumber)
+            if i + 1 < len(lines):
+                result = _try_parse_amount(lines[i + 1])
+                if result is not None:
+                    return result
+            # Try: label line ends with $ and amount is at start of next line
+            if line.rstrip().endswith("$") and i + 1 < len(lines):
                 m = re.search(r"^([\d,]+(?:\.\d{2})?)", lines[i + 1].strip())
-            if m:
-                try:
-                    val = float(m.group(1).replace(",", ""))
-                    if val > 100_000:           # sanity: real NAV is > $100K
-                        return round(val / 1_000_000, 2)
-                except ValueError:
-                    pass
+                if m:
+                    try:
+                        val = float(m.group(1).replace(",", ""))
+                        if val > 100_000:
+                            return round(val / 1_000_000, 2)
+                    except ValueError:
+                        pass
     return None
 
 
@@ -165,11 +220,25 @@ def _is_skip_cell(cell_text: str) -> bool:
     return cell_text.lower().strip() in _SKIP_CELLS
 
 
-def _parse_return_from_row(cells, diagnostics=None):
+def _parse_return_from_row(cells, diagnostics=None, return_col_idx=None):
     """
     Extract a monthly return float from a table row's cells.
+    If return_col_idx is provided, use that specific column first.
     Returns (float, None) on success or (None, str) with reason on failure.
     """
+    # If we know the exact column, use it directly
+    if return_col_idx is not None and return_col_idx < len(cells):
+        clean = _normalize_cell(cells[return_col_idx])
+        if clean and not _is_skip_cell(clean):
+            try:
+                val = float(clean)
+                if -20 <= val <= 20:
+                    return val / 100.0, None
+            except ValueError:
+                if diagnostics is not None:
+                    diagnostics.append(f"unparseable target col cell: '{clean}'")
+
+    # Fallback: scan all cells after column 0
     for cell in cells[1:]:
         clean = _normalize_cell(cell)
         if not clean or _is_skip_cell(clean):
@@ -185,9 +254,56 @@ def _parse_return_from_row(cells, diagnostics=None):
     return None, f"no valid return in cells: {[_normalize_cell(c) for c in cells]}"
 
 
+# ── Column-header-aware parsing ──────────────────────────────────────────────
+
+_NET_RETURN_HEADERS = {"net return", "net ret", "net ror", "net perf", "net performance",
+                       "return (net)", "net of fees", "monthly net", "net return (%)",
+                       "return (%)", "monthly return"}
+_GROSS_RETURN_HEADERS = {"gross return", "gross ret", "gross ror", "gross perf"}
+_SKIP_COL_HEADERS = {"cumulative", "cum nav", "cum. nav", "notes", "benchmark",
+                     "s&p", "spy", "index", "comment", "attribution"}
+
+
+def _find_return_column(header_cells):
+    """
+    Given a header row's cells, find the best column index for net returns.
+    Priority: net return > generic return > gross return.
+    Skips columns classified as cumulative/benchmark/notes.
+    Returns (col_index, col_label) or (None, None).
+    """
+    net_col = None
+    gross_col = None
+
+    for idx, cell in enumerate(header_cells):
+        if idx == 0:
+            continue
+        cell_l = str(cell or "").lower().strip()
+        if any(kw in cell_l for kw in _SKIP_COL_HEADERS):
+            continue
+        if any(kw in cell_l for kw in _NET_RETURN_HEADERS):
+            net_col = (idx, cell_l)
+        elif any(kw in cell_l for kw in _GROSS_RETURN_HEADERS):
+            gross_col = (idx, cell_l)
+
+    if net_col:
+        return net_col
+    if gross_col:
+        return gross_col
+    return None, None
+
+
+# Keywords that indicate a row is a risk/stats label, NOT a performance header
+_RISK_TABLE_KEYWORDS = {"annualized", "volatility", "sharpe", "sortino", "drawdown",
+                        "correlation", "beta", "alpha", "std dev", "variance",
+                        "tracking error", "information ratio"}
+
+
 def _is_header_row(row_text: str) -> bool:
-    """Check if a row is a performance table header."""
+    """Check if a row is a performance table header (not a risk metrics row)."""
     row_lower = row_text.lower()
+    # Reject rows that look like risk/stats table labels
+    if any(kw in row_lower for kw in _RISK_TABLE_KEYWORDS):
+        return False
     return any(kw in row_lower for kw in _RETURN_HEADER_KEYWORDS)
 
 
@@ -256,6 +372,9 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
     diagnostics["rows_matched"] = 0
     diagnostics["rows_skipped"] = 0
 
+    return_col_idx = None
+    return_col_label = None
+
     for table_idx, table in enumerate(tables):
         # Check for horizontal/calendar format first
         year_col = _detect_horizontal_table(table)
@@ -282,6 +401,7 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
         # Standard vertical format
         table_returns = []
         has_month_col = False
+        table_return_col = None
 
         for row in table:
             if not row:
@@ -293,6 +413,11 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
             # Detect header row — marks this table as a performance table
             if _is_header_row(row_text):
                 has_month_col = True
+                # Use column-header-aware parsing to find the right column
+                col_idx, col_label = _find_return_column(cells)
+                if col_idx is not None:
+                    table_return_col = col_idx
+                    return_col_label = col_label
                 continue
 
             first_cell = cells[0] if cells else ""
@@ -300,7 +425,9 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
 
             if is_month_row or has_month_col:
                 cell_diag = []
-                val, err = _parse_return_from_row(cells, diagnostics=cell_diag)
+                val, err = _parse_return_from_row(
+                    cells, diagnostics=cell_diag, return_col_idx=table_return_col
+                )
                 if val is not None:
                     table_returns.append(val)
                     diagnostics["rows_matched"] += 1
@@ -310,12 +437,14 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
                     if cell_diag:
                         warnings.extend(cell_diag)
 
-        # Accept this table if it has 6+ months (main table) or 1-5 months (continuation)
-        if len(table_returns) >= 6:
+        # Accept this table if it has 6+ months AND more matches than current best
+        if len(table_returns) >= 6 and len(table_returns) > len(all_returns):
             all_returns = table_returns   # main performance table found
+            return_col_idx = table_return_col
         elif 1 <= len(table_returns) <= 5 and all_returns:
             all_returns.extend(table_returns)  # continuation rows (split across pages)
 
+    diagnostics["return_column"] = return_col_label or "auto (first numeric)"
     return all_returns, warnings
 
 
@@ -450,6 +579,8 @@ def load_fund_from_pdf(path: str) -> dict:
                 "rows_skipped":     int,
                 "method":           "table" | "text" | "summary" | "failed",
                 "returns_count":    int,
+                "confidence":       float,   # 0.0–1.0 trust signal
+                "return_column":    str,     # which column header was used
                 "warnings":         list[str],
                 "summary_perf":     dict | None,
             }
@@ -507,6 +638,16 @@ def load_fund_from_pdf(path: str) -> dict:
             f"Warnings: {warnings}"
         )
 
+    # ── Confidence score ─────────────────────────────────────────────────────
+    method_scores = {"table": 1.0, "text": 0.5, "summary": 0.3, "failed": 0.0}
+    method_score = method_scores.get(method, 0.0)
+    completeness_score = min(len(returns) / 12.0, 1.0)
+    warning_penalty = min(len(warnings) * 0.1, 1.0)
+    confidence = round(
+        method_score * 0.4 + completeness_score * 0.5 + (1.0 - warning_penalty) * 0.1,
+        3
+    )
+
     return {
         "fund_id":       ticker,
         "ticker":        ticker,
@@ -524,6 +665,8 @@ def load_fund_from_pdf(path: str) -> dict:
             "rows_skipped":     diagnostics.get("rows_skipped", 0),
             "method":           method,
             "returns_count":    len(returns),
+            "confidence":       confidence,
+            "return_column":    diagnostics.get("return_column", "unknown"),
             "warnings":         warnings,
             "summary_perf":     summary_perf,
         },
