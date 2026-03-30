@@ -94,6 +94,91 @@ def api_portfolio():
     })
 
 
+@app.route("/api/fee_arbitrage")
+def api_fee_arbitrage():
+    """
+    Equi's first-layer alpha: fee negotiation on undiscovered managers.
+
+    Tory has stated publicly that Equi negotiates manager fees down 50-60%
+    on average. This endpoint simulates the compounding impact of that fee
+    discount over a 5-year horizon vs paying full market-rate fees.
+
+    Standard hedge fund fee: 2% management + 20% performance (2/20)
+    Equi-negotiated fee:     1% management + 10% performance (1/10)
+
+    Gross return assumption: 15% annually (realistic for top-quartile alt managers)
+    """
+    gross_annual = 0.15
+    years        = 5
+    initial      = 1_000_000  # $1M baseline
+
+    standard_mgmt = 0.02
+    standard_perf = 0.20
+    equi_mgmt     = 0.01
+    equi_perf     = 0.10
+
+    standard_curve, equi_curve = [initial], [initial]
+
+    for _ in range(years):
+        # Standard fees
+        prev = standard_curve[-1]
+        gross = prev * (1 + gross_annual)
+        profit = gross - prev
+        net = gross - prev * standard_mgmt - profit * standard_perf
+        standard_curve.append(round(net, 2))
+
+        # Equi-negotiated fees
+        prev = equi_curve[-1]
+        gross = prev * (1 + gross_annual)
+        profit = gross - prev
+        net = gross - prev * equi_mgmt - profit * equi_perf
+        equi_curve.append(round(net, 2))
+
+    fee_savings_5yr = round(equi_curve[-1] - standard_curve[-1], 0)
+    pct_uplift      = round((equi_curve[-1] / standard_curve[-1] - 1) * 100, 1)
+
+    return jsonify({
+        "labels":          list(range(years + 1)),
+        "standard_curve":  standard_curve,
+        "equi_curve":      equi_curve,
+        "fee_savings_5yr": fee_savings_5yr,
+        "pct_uplift":      pct_uplift,
+        "initial":         initial,
+        "gross_annual_pct": gross_annual * 100,
+    })
+
+
+@app.route("/api/moat")
+def api_moat():
+    """Competitive differentiation vs iCapital, CAIS, PitchBook."""
+    return jsonify([
+        {
+            "competitor": "iCapital",
+            "model":      "Distribution platform — aggregates other managers' products",
+            "equi_diff":  "Equi selects & manages directly. Alpha claim is Equi's own.",
+            "icon": "📦",
+        },
+        {
+            "competitor": "CAIS",
+            "model":      "62K advisors, fee cut to 0.05% — competing on volume",
+            "equi_diff":  "Equi competes on quality + uncorrelated return, not price.",
+            "icon": "📊",
+        },
+        {
+            "competitor": "PitchBook / AlternativeSoft",
+            "model":      "Sell analytics tools to institutional buyers",
+            "equi_diff":  "Equi's scoring feeds its own allocation. Tool = process.",
+            "icon": "🛠️",
+        },
+        {
+            "competitor": "Moonfare / Titanbay",
+            "model":      "PE/private markets access for HNW, secondary liquidity",
+            "equi_diff":  "Equi targets hedge fund strategies, liquid alternatives, low corr.",
+            "icon": "🌙",
+        },
+    ])
+
+
 if __name__ == "__main__":
     print("\n  Equi Fund Scoring Dashboard → http://localhost:5001\n")
     app.run(debug=False, port=5001)

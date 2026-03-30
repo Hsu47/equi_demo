@@ -83,6 +83,20 @@
     .insight { background: rgba(88,166,255,.07); border: 1px solid rgba(88,166,255,.25); border-radius: 8px; padding: 14px 18px; font-size: 0.83rem; color: var(--text); line-height: 1.6; margin-top: 18px; }
     .insight strong { color: var(--accent); }
 
+    /* ── Fee arbitrage ── */
+    .fee-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+    .fee-stat { text-align: center; }
+    .fee-stat .val { font-size: 1.6rem; font-weight: 700; }
+    .fee-stat .sub { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+
+    /* ── Moat grid ── */
+    .moat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .moat-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .moat-card .comp { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+    .moat-card .their { font-size: 0.78rem; color: var(--muted); margin-bottom: 8px; line-height: 1.5; }
+    .moat-card .ours  { font-size: 0.8rem; color: var(--accent); line-height: 1.5; }
+    .moat-card .icon  { font-size: 1.2rem; margin-bottom: 8px; display: block; }
+
     /* ── Footer ── */
     footer { max-width: 1100px; margin: 32px auto 0; font-size: 0.75rem; color: var(--muted); display: flex; justify-content: space-between; }
     footer a { color: var(--accent); text-decoration: none; }
@@ -135,6 +149,29 @@
     <div class="compare-grid" id="compare-grid"></div>
     <canvas id="barChart" height="90"></canvas>
     <div class="insight" id="insight-box"></div>
+  </div>
+
+  <!-- Fee Arbitrage -->
+  <div class="card">
+    <h2>Equi's Alpha Layer 1 — Fee Arbitrage via Early-Stage Manager Access</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:18px;">
+      Tory Reiss has stated Equi negotiates manager fees down <strong style="color:var(--text)">50–60% on average</strong>
+      by approaching managers before institutional capital discovers them.
+      On a $1M allocation at 15% gross annual return, the fee savings compound significantly over 5 years.
+    </p>
+    <div class="fee-stats" id="fee-stats"></div>
+    <canvas id="feeChart" height="80"></canvas>
+    <div class="insight" style="margin-top:16px" id="fee-insight"></div>
+  </div>
+
+  <!-- Competitive Moat -->
+  <div class="card">
+    <h2>Why Equi — Competitive Differentiation</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:18px;">
+      iCapital and CAIS distribute other managers' products. PitchBook sells analytics to institutions.
+      Equi's scoring system <em>is</em> the investment process — that's a fundamentally different engineering problem.
+    </p>
+    <div class="moat-grid" id="moat-grid"></div>
   </div>
 
   <!-- Correlation Matrix -->
@@ -272,6 +309,69 @@ fetch('/api/portfolio').then(r => r.json()).then(d => {
   });
   html += '</tbody>';
   document.getElementById('corr-table').innerHTML = html;
+});
+
+// ── Fee Arbitrage ─────────────────────────────────────────────────────────────
+fetch('/api/fee_arbitrage').then(r => r.json()).then(d => {
+  const fmt = v => '$' + (v/1000).toFixed(0) + 'K';
+  document.getElementById('fee-stats').innerHTML = `
+    <div class="fee-stat">
+      <div class="val" style="color:var(--muted)">${fmt(d.standard_curve.at(-1))}</div>
+      <div class="sub">Full-fee (2/20) · 5yr</div>
+    </div>
+    <div class="fee-stat">
+      <div class="val" style="color:var(--green)">${fmt(d.equi_curve.at(-1))}</div>
+      <div class="sub">Equi-negotiated (1/10) · 5yr</div>
+    </div>
+    <div class="fee-stat">
+      <div class="val" style="color:var(--accent)">+${d.pct_uplift}%</div>
+      <div class="sub">Net return uplift from fee savings</div>
+    </div>`;
+
+  new Chart(document.getElementById('feeChart'), {
+    type: 'line',
+    data: {
+      labels: d.labels.map(y => 'Year ' + y),
+      datasets: [
+        { label: 'Equi (1/10 fees)', data: d.equi_curve,
+          borderColor: '#58a6ff', backgroundColor: 'rgba(88,166,255,0.08)',
+          fill: true, tension: 0.3, pointRadius: 4 },
+        { label: 'Market rate (2/20)', data: d.standard_curve,
+          borderColor: '#484f58', backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 4 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#8b949e', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#8b949e', callback: v => '$'+(v/1000).toFixed(0)+'K' },
+             grid: { color: '#21262d' } },
+      }
+    }
+  });
+
+  document.getElementById('fee-insight').innerHTML =
+    `<strong>Fee arbitrage insight:</strong> On a $${(d.initial/1e6).toFixed(0)}M allocation at
+    ${d.gross_annual_pct}% gross annual return, Equi's negotiated fee structure (1% mgmt + 10% perf)
+    generates <strong>+${d.pct_uplift}% more</strong> than paying standard 2/20 over 5 years —
+    <strong>$${(d.fee_savings_5yr/1000).toFixed(0)}K in additional compounded return</strong>.
+    This is why accessing managers <em>before</em> they have pricing power is Equi's first-layer alpha.`;
+});
+
+// ── Competitive Moat ──────────────────────────────────────────────────────────
+fetch('/api/moat').then(r => r.json()).then(items => {
+  const grid = document.getElementById('moat-grid');
+  items.forEach(m => {
+    grid.innerHTML += `
+      <div class="moat-card">
+        <span class="icon">${m.icon}</span>
+        <div class="comp">${m.competitor}</div>
+        <div class="their">${m.model}</div>
+        <div class="ours">→ ${m.equi_diff}</div>
+      </div>`;
+  });
 });
 </script>
 </body>
