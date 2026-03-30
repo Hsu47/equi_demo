@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Equi — Fund Scoring Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0d1117;
+      --surface: #161b22;
+      --border:  #30363d;
+      --accent:  #58a6ff;
+      --green:   #3fb950;
+      --yellow:  #d29922;
+      --red:     #f85149;
+      --gem:     #e3b341;
+      --text:    #c9d1d9;
+      --muted:   #8b949e;
+    }
+
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 32px 24px; }
+
+    /* ── Header ── */
+    header { max-width: 1100px; margin: 0 auto 40px; display: flex; justify-content: space-between; align-items: flex-end; }
+    header h1 { font-size: 1.5rem; font-weight: 600; color: #fff; }
+    header h1 span { color: var(--accent); }
+    header p  { color: var(--muted); font-size: 0.82rem; margin-top: 4px; }
+    .badge    { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px; font-size: 0.75rem; color: var(--muted); }
+
+    /* ── Layout ── */
+    .wrap { max-width: 1100px; margin: 0 auto; display: grid; gap: 24px; }
+
+    /* ── Cards ── */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
+    .card h2 { font-size: 0.9rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 18px; }
+
+    /* ── KPI row ── */
+    .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; text-align: center; }
+    .kpi .val { font-size: 2rem; font-weight: 700; color: #fff; }
+    .kpi .lbl { font-size: 0.75rem; color: var(--muted); margin-top: 4px; }
+
+    /* ── Fund table ── */
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: right; padding: 8px 12px; color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); }
+    th:first-child, th:nth-child(2) { text-align: left; }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: right; }
+    td:first-child, td:nth-child(2) { text-align: left; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(88,166,255,0.04); }
+
+    .rec-badge { display: inline-block; padding: 2px 9px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; }
+    .RECOMMEND { background: rgba(63,185,80,.18); color: var(--green); }
+    .WATCHLIST  { background: rgba(210,153,34,.18); color: var(--yellow); }
+    .PASS       { background: rgba(248,81,73,.12);  color: var(--red); }
+
+    .gem-tag { color: var(--gem); font-size: 0.8rem; margin-left: 4px; }
+
+    .bar-bg { display: inline-block; background: var(--border); border-radius: 4px; height: 6px; width: 60px; vertical-align: middle; margin-left: 6px; }
+    .bar-fill { height: 6px; border-radius: 4px; background: var(--accent); }
+
+    /* ── Portfolio comparison ── */
+    .compare-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+    .cmp { text-align: center; }
+    .cmp .label  { font-size: 0.72rem; color: var(--muted); margin-bottom: 8px; }
+    .cmp .values { display: flex; gap: 24px; justify-content: center; align-items: flex-end; }
+    .cmp .val-block .num { font-size: 1.5rem; font-weight: 700; }
+    .cmp .val-block .sub { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+    .port-color { color: var(--accent); }
+    .spy-color  { color: var(--muted); }
+
+    /* ── Correlation matrix ── */
+    .corr-wrap { overflow-x: auto; }
+    .corr-table { border-collapse: collapse; font-size: 0.78rem; }
+    .corr-table th, .corr-table td { padding: 8px 14px; text-align: center; }
+    .corr-table th { color: var(--muted); font-weight: 500; }
+    .corr-cell { border-radius: 4px; font-weight: 600; }
+
+    /* ── Insight box ── */
+    .insight { background: rgba(88,166,255,.07); border: 1px solid rgba(88,166,255,.25); border-radius: 8px; padding: 14px 18px; font-size: 0.83rem; color: var(--text); line-height: 1.6; margin-top: 18px; }
+    .insight strong { color: var(--accent); }
+
+    /* ── Fee arbitrage ── */
+    .fee-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+    .fee-stat { text-align: center; }
+    .fee-stat .val { font-size: 1.6rem; font-weight: 700; }
+    .fee-stat .sub { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+
+    /* ── Moat grid ── */
+    .moat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .moat-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .moat-card .comp { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+    .moat-card .their { font-size: 0.78rem; color: var(--muted); margin-bottom: 8px; line-height: 1.5; }
+    .moat-card .ours  { font-size: 0.8rem; color: var(--accent); line-height: 1.5; }
+    .moat-card .icon  { font-size: 1.2rem; margin-bottom: 8px; display: block; }
+
+    /* ── Footer ── */
+    footer { max-width: 1100px; margin: 32px auto 0; font-size: 0.75rem; color: var(--muted); display: flex; justify-content: space-between; }
+    footer a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1><span>Equi</span> — Fund Scoring Dashboard</h1>
+    <p>Systematic evaluation of opaque alternative funds · Built by Lambert (Chia-Chun Hsu)</p>
+  </div>
+  <span class="badge">Demo MVP · 2025</span>
+</header>
+
+<div class="wrap">
+
+  <!-- KPIs -->
+  <div class="kpi-row" id="kpi-row">
+    <div class="kpi"><div class="val" id="k-total">–</div><div class="lbl">Funds Evaluated</div></div>
+    <div class="kpi"><div class="val" style="color:var(--green)" id="k-rec">–</div><div class="lbl">RECOMMEND</div></div>
+    <div class="kpi"><div class="val" style="color:var(--accent)" id="k-psharpe">–</div><div class="lbl">Portfolio Sharpe</div></div>
+    <div class="kpi"><div class="val" style="color:var(--muted)" id="k-ssharpe">–</div><div class="lbl">SPY Sharpe</div></div>
+  </div>
+
+  <!-- Fund Ranking Table -->
+  <div class="card">
+    <h2>Fund Rankings</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Fund</th>
+          <th>AUM $M</th>
+          <th>Ann. Return</th>
+          <th>Sharpe</th>
+          <th>Max DD</th>
+          <th>Mkt Corr</th>
+          <th>Score</th>
+          <th>Signal</th>
+        </tr>
+      </thead>
+      <tbody id="fund-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Portfolio Analytics -->
+  <div class="card">
+    <h2>Portfolio Analytics — RECOMMEND Tier vs SPY</h2>
+    <div class="compare-grid" id="compare-grid"></div>
+    <canvas id="barChart" height="90"></canvas>
+    <div class="insight" id="insight-box"></div>
+  </div>
+
+  <!-- Fee Arbitrage -->
+  <div class="card">
+    <h2>Equi's Alpha Layer 1 — Fee Arbitrage via Early-Stage Manager Access</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:18px;">
+      Tory Reiss has stated Equi negotiates manager fees down <strong style="color:var(--text)">50–60% on average</strong>
+      by approaching managers before institutional capital discovers them.
+      On a $1M allocation at 15% gross annual return, the fee savings compound significantly over 5 years.
+    </p>
+    <div class="fee-stats" id="fee-stats"></div>
+    <canvas id="feeChart" height="80"></canvas>
+    <div class="insight" style="margin-top:16px" id="fee-insight"></div>
+  </div>
+
+  <!-- Competitive Moat -->
+  <div class="card">
+    <h2>Why Equi — Competitive Differentiation</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:18px;">
+      iCapital and CAIS distribute other managers' products. PitchBook sells analytics to institutions.
+      Equi's scoring system <em>is</em> the investment process — that's a fundamentally different engineering problem.
+    </p>
+    <div class="moat-grid" id="moat-grid"></div>
+  </div>
+
+  <!-- Correlation Matrix -->
+  <div class="card">
+    <h2>Cross-Fund Correlation Matrix</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;">
+      Low cross-fund correlation = genuine diversification. This is Equi's core promise to investors.
+    </p>
+    <div class="corr-wrap"><table class="corr-table" id="corr-table"></table></div>
+  </div>
+
+</div>
+
+<footer>
+  <span>Lambert (Chia-Chun Hsu) · UIUC Financial Engineering · <a href="https://github.com/Hsu47/equi_demo" target="_blank">github.com/Hsu47/equi_demo</a></span>
+  <span>Data: simulated · Benchmark: SPY proxy 2023</span>
+</footer>
+
+<script>
+// ── Colour helpers ────────────────────────────────────────────────────────────
+const recColor = { RECOMMEND: '#3fb950', WATCHLIST: '#d29922', PASS: '#f85149' };
+
+function corrColor(v) {
+  // -1 → green, 0 → neutral dark, +1 → red
+  const abs = Math.abs(v);
+  if (v >= 0.6)  return 'rgba(248,81,73,0.6)';
+  if (v >= 0.3)  return 'rgba(248,81,73,0.25)';
+  if (v <= -0.6) return 'rgba(63,185,80,0.6)';
+  if (v <= -0.3) return 'rgba(63,185,80,0.25)';
+  return 'rgba(88,166,255,0.12)';
+}
+
+function scoreBar(score) {
+  const w = Math.round(score * 0.6);
+  return `<span class="bar-bg"><span class="bar-fill" style="width:${w}px"></span></span>`;
+}
+
+// ── Fetch fund data ───────────────────────────────────────────────────────────
+fetch('/api/funds').then(r => r.json()).then(funds => {
+  document.getElementById('k-total').textContent = funds.length;
+  document.getElementById('k-rec').textContent   = funds.filter(f => f.rec === 'RECOMMEND').length;
+
+  const tbody = document.getElementById('fund-tbody');
+  funds.forEach(f => {
+    const gem  = f.gem ? '<span class="gem-tag" title="Undiscovered Gem">💎</span>' : '';
+    const aum  = f.aum_mm ? f.aum_mm : '–';
+    const dd   = (f.max_dd * 100).toFixed(1) + '%';
+    const ret  = (f.ann_return > 0 ? '+' : '') + f.ann_return.toFixed(1) + '%';
+    tbody.innerHTML += `
+      <tr>
+        <td>${f.rank}</td>
+        <td><strong>${f.name}</strong>${gem}</td>
+        <td>${aum}</td>
+        <td>${ret}</td>
+        <td>${f.sharpe.toFixed(2)}</td>
+        <td style="color:${f.max_dd < -0.10 ? 'var(--red)' : 'inherit'}">${dd}</td>
+        <td>${f.corr.toFixed(3)}</td>
+        <td>${f.score.toFixed(1)} ${scoreBar(f.score)}</td>
+        <td><span class="rec-badge ${f.rec}">${f.rec}</span></td>
+      </tr>`;
+  });
+});
+
+// ── Fetch portfolio analytics ─────────────────────────────────────────────────
+fetch('/api/portfolio').then(r => r.json()).then(d => {
+  if (!d.funds) return;
+
+  // KPIs
+  document.getElementById('k-psharpe').textContent = d.port_sharpe.toFixed(2);
+  document.getElementById('k-ssharpe').textContent = d.spy_sharpe.toFixed(2);
+
+  // Compare grid
+  const metrics = [
+    { label: 'Annual Return',  port: d.port_return.toFixed(1) + '%', spy: d.spy_return.toFixed(1) + '%' },
+    { label: 'Sharpe Ratio',   port: d.port_sharpe.toFixed(2),       spy: d.spy_sharpe.toFixed(2) },
+    { label: 'Max Drawdown',   port: (d.port_dd * 100).toFixed(1) + '%', spy: (d.spy_dd * 100).toFixed(1) + '%' },
+  ];
+  const grid = document.getElementById('compare-grid');
+  metrics.forEach(m => {
+    grid.innerHTML += `
+      <div class="cmp">
+        <div class="label">${m.label}</div>
+        <div class="values">
+          <div class="val-block"><div class="num port-color">${m.port}</div><div class="sub">Portfolio</div></div>
+          <div class="val-block"><div class="num spy-color">${m.spy}</div><div class="sub">SPY</div></div>
+        </div>
+      </div>`;
+  });
+
+  // Bar chart
+  new Chart(document.getElementById('barChart'), {
+    type: 'bar',
+    data: {
+      labels: ['Annual Return (%)', 'Sharpe Ratio', 'Max Drawdown (×10)'],
+      datasets: [
+        { label: 'RECOMMEND Portfolio', backgroundColor: '#58a6ff',
+          data: [d.port_return, d.port_sharpe, d.port_dd * -10] },
+        { label: 'SPY Benchmark',       backgroundColor: '#484f58',
+          data: [d.spy_return,  d.spy_sharpe,  d.spy_dd  * -10] },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#8b949e', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } },
+      }
+    }
+  });
+
+  // Insight box
+  document.getElementById('insight-box').innerHTML =
+    `<strong>Key insight:</strong> The RECOMMEND portfolio achieves Sharpe
+    <strong>${d.port_sharpe.toFixed(2)}</strong> vs SPY's
+    <strong>${d.spy_sharpe.toFixed(2)}</strong> — ${(d.port_sharpe / d.spy_sharpe).toFixed(1)}× better
+    risk-adjusted return with near-zero drawdown. This is Equi's core value proposition:
+    combining <strong>uncorrelated managers</strong> produces a portfolio that's genuinely
+    diversified, not just levered equity in disguise. The cross-fund correlations below
+    confirm these strategies don't move together.`;
+
+  // Correlation matrix
+  const names = d.funds;
+  const mat   = d.correlation_matrix;
+  let html = '<thead><tr><th></th>' + names.map(n => `<th>${n.split(' ')[0]}</th>`).join('') + '</tr></thead><tbody>';
+  names.forEach((n, i) => {
+    html += `<tr><th style="text-align:right;color:var(--text)">${n.split(' ')[0]}</th>`;
+    mat[i].forEach((v, j) => {
+      const diag = i === j;
+      const bg   = diag ? 'rgba(88,166,255,0.08)' : corrColor(v);
+      const txt  = diag ? '—' : v.toFixed(3);
+      html += `<td class="corr-cell" style="background:${bg}">${txt}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+  document.getElementById('corr-table').innerHTML = html;
+});
+
+// ── Fee Arbitrage ─────────────────────────────────────────────────────────────
+fetch('/api/fee_arbitrage').then(r => r.json()).then(d => {
+  const fmt = v => '$' + (v/1000).toFixed(0) + 'K';
+  document.getElementById('fee-stats').innerHTML = `
+    <div class="fee-stat">
+      <div class="val" style="color:var(--muted)">${fmt(d.standard_curve.at(-1))}</div>
+      <div class="sub">Full-fee (2/20) · 5yr</div>
+    </div>
+    <div class="fee-stat">
+      <div class="val" style="color:var(--green)">${fmt(d.equi_curve.at(-1))}</div>
+      <div class="sub">Equi-negotiated (1/10) · 5yr</div>
+    </div>
+    <div class="fee-stat">
+      <div class="val" style="color:var(--accent)">+${d.pct_uplift}%</div>
+      <div class="sub">Net return uplift from fee savings</div>
+    </div>`;
+
+  new Chart(document.getElementById('feeChart'), {
+    type: 'line',
+    data: {
+      labels: d.labels.map(y => 'Year ' + y),
+      datasets: [
+        { label: 'Equi (1/10 fees)', data: d.equi_curve,
+          borderColor: '#58a6ff', backgroundColor: 'rgba(88,166,255,0.08)',
+          fill: true, tension: 0.3, pointRadius: 4 },
+        { label: 'Market rate (2/20)', data: d.standard_curve,
+          borderColor: '#484f58', backgroundColor: 'transparent',
+          tension: 0.3, pointRadius: 4 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { labels: { color: '#8b949e', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } },
+        y: { ticks: { color: '#8b949e', callback: v => '$'+(v/1000).toFixed(0)+'K' },
+             grid: { color: '#21262d' } },
+      }
+    }
+  });
+
+  document.getElementById('fee-insight').innerHTML =
+    `<strong>Fee arbitrage insight:</strong> On a $${(d.initial/1e6).toFixed(0)}M allocation at
+    ${d.gross_annual_pct}% gross annual return, Equi's negotiated fee structure (1% mgmt + 10% perf)
+    generates <strong>+${d.pct_uplift}% more</strong> than paying standard 2/20 over 5 years —
+    <strong>$${(d.fee_savings_5yr/1000).toFixed(0)}K in additional compounded return</strong>.
+    This is why accessing managers <em>before</em> they have pricing power is Equi's first-layer alpha.`;
+});
+
+// ── Competitive Moat ──────────────────────────────────────────────────────────
+fetch('/api/moat').then(r => r.json()).then(items => {
+  const grid = document.getElementById('moat-grid');
+  items.forEach(m => {
+    grid.innerHTML += `
+      <div class="moat-card">
+        <span class="icon">${m.icon}</span>
+        <div class="comp">${m.competitor}</div>
+        <div class="their">${m.model}</div>
+        <div class="ours">→ ${m.equi_diff}</div>
+      </div>`;
+  });
+});
+</script>
+</body>
+</html>
