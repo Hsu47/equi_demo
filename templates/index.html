@@ -234,7 +234,8 @@ fetch('/api/funds').then(r => r.json()).then(funds => {
 
   const tbody = document.getElementById('fund-tbody');
   funds.forEach(f => {
-    const gem  = f.gem ? '<span class="gem-tag" title="Undiscovered Gem">💎</span>' : '';
+    const gemLabel = f.gem_tier === 'strong' ? '💎 Strong Gem' : f.gem_tier === 'emerging' ? '💎 Emerging' : '';
+    const gem  = f.gem ? `<span class="gem-tag" title="Undiscovered Gem — AUM below institutional radar">&nbsp;${gemLabel}</span>` : '';
     const aum  = f.aum_mm ? f.aum_mm : '–';
     const dd   = (f.max_dd * 100).toFixed(1) + '%';
     const ret  = (f.ann_return > 0 ? '+' : '') + f.ann_return.toFixed(1) + '%';

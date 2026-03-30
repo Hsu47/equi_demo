@@ -193,11 +193,21 @@ def undiscovered_gem_flag(sharpe: float, aum_mm: Optional[float],
     These are Equi's highest-value targets: better fee negotiation, first-mover
     allocation advantage, and asymmetric upside as AUM grows.
 
-    Criteria: composite_score ≥ 70 AND AUM < $300M (under the institutional radar)
+    Criteria (two tiers):
+      Tier 1 — Strong Gem:   composite ≥ 85 AND AUM < $500M
+        High-conviction manager still below the minimum ticket size for large
+        allocators (pension funds, sovereign wealth). Equi can access them.
+      Tier 2 — Emerging Gem: composite ≥ 65 AND AUM < $250M
+        Clearly pre-institutional scale with solid metrics — early-mover window.
+
+    $500M is the standard threshold below which institutional capital cannot
+    efficiently deploy, giving Equi's nimbler structure a first-mover advantage.
     """
     if aum_mm is None:
         return False
-    return composite >= 70 and aum_mm < 300
+    tier1 = composite >= 85 and aum_mm < 500
+    tier2 = composite >= 65 and aum_mm < 250
+    return tier1 or tier2
 
 
 def portfolio_analytics(recommended: List[dict]) -> dict:

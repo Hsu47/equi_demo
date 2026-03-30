@@ -55,6 +55,8 @@ def api_funds():
             "score":        f["composite_score"],
             "rec":          f["recommendation"],
             "gem":          f.get("gem", False),
+            "gem_tier":     "strong" if (f.get("composite_score",0) >= 85 and (f.get("aum_mm") or 999) < 500)
+                            else ("emerging" if f.get("gem") else None),
         })
     return jsonify(out)
 
