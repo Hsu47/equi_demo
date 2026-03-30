@@ -128,6 +128,40 @@
     .omap-legend span { display: flex; align-items: center; gap: 6px; }
     .omap-legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 
+    /* ── Pipeline Architecture ── */
+    .arch-sources { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 10px; }
+    .arch-source { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 0.78rem; font-weight: 600; color: var(--text); line-height: 1.6; }
+    .arch-source span { font-size: 0.7rem; color: var(--muted); font-weight: 400; display: block; margin-top: 2px; }
+    .arch-arrow-down { text-align: center; color: var(--muted); margin: 8px 0; font-size: 1rem; letter-spacing: 2px; }
+    .arch-flow { display: flex; align-items: stretch; gap: 0; }
+    .arch-arrow { color: var(--muted); font-size: 1.1rem; padding: 0 10px; display: flex; align-items: center; flex-shrink: 0; }
+    .arch-layer { flex: 1; background: rgba(88,166,255,0.05); border: 1px solid rgba(88,166,255,0.18); border-radius: 8px; padding: 14px; }
+    .arch-layer-name { font-size: 0.82rem; font-weight: 700; color: var(--accent); margin-bottom: 5px; }
+    .arch-layer-desc { font-size: 0.72rem; color: var(--muted); line-height: 1.55; }
+    .arch-layer-badge { display: inline-block; background: rgba(88,166,255,0.1); border-radius: 10px; padding: 2px 8px; font-size: 0.67rem; color: var(--accent); margin-top: 7px; font-family: "SF Mono", monospace; }
+    .arch-output { background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.22); border-radius: 8px; padding: 12px 18px; text-align: center; font-size: 0.82rem; color: var(--green); font-weight: 600; margin-top: 4px; }
+    .arch-output span { font-size: 0.72rem; color: var(--muted); font-weight: 400; margin-left: 10px; }
+    .arch-props { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 18px; }
+    .arch-prop { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+    .arch-prop-title { font-size: 0.8rem; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+    .arch-prop-desc { font-size: 0.73rem; color: var(--muted); line-height: 1.6; }
+
+    /* ── Restatement Simulation ── */
+    .restate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 16px; }
+    .restate-col h3 { font-size: 0.75rem; font-weight: 600; color: var(--muted); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .restate-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid rgba(48,54,61,0.5); font-size: 0.8rem; }
+    .restate-row:last-child { border-bottom: none; }
+    .restate-row .metric { color: var(--muted); }
+    .restate-row .before { color: var(--text); }
+    .restate-row .after { font-weight: 600; }
+
+    /* ── Regime stress test ── */
+    .regime-desc { font-size: 0.78rem; color: var(--muted); line-height: 1.65; margin-bottom: 20px; }
+    .regime-insight { background: rgba(255,140,0,.07); border: 1px solid rgba(255,140,0,.30); border-radius: 8px; padding: 14px 18px; font-size: 0.83rem; color: var(--text); line-height: 1.6; margin-top: 18px; }
+    .regime-insight strong { color: #ff8c00; }
+    .regime-ok     { background: rgba(63,185,80,.07); border: 1px solid rgba(63,185,80,.25); border-radius: 8px; padding: 14px 18px; font-size: 0.83rem; color: var(--text); line-height: 1.6; margin-top: 18px; }
+    .regime-ok strong { color: var(--green); }
+
     /* ── Pipeline log banner ── */
     .pipeline-log {
       max-width: 1100px; margin: -24px auto 28px;
@@ -147,6 +181,22 @@
     .pipeline-log .sep  { color: #30363d; }
     .pipeline-log .ts   { margin-left: auto; opacity: 0.45; font-size: 0.68rem; }
 
+    /* ── Build Roadmap ── */
+    .roadmap-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 16px; }
+    .roadmap-table th { text-align: left; padding: 8px 14px; color: var(--muted); font-weight: 500; font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); }
+    .roadmap-table td { padding: 12px 14px; border-bottom: 1px solid rgba(48,54,61,0.5); vertical-align: top; line-height: 1.5; }
+    .roadmap-table tr:last-child td { border-bottom: none; }
+    .roadmap-table .wk { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
+    .roadmap-table .prob { color: var(--text); font-weight: 600; font-size: 0.8rem; }
+    .roadmap-table .prob span { display: block; font-size: 0.73rem; color: var(--muted); font-weight: 400; margin-top: 2px; }
+    .roadmap-table .sol { color: var(--accent); font-size: 0.78rem; }
+    .roadmap-table .sol span { display: block; color: var(--muted); font-size: 0.72rem; margin-top: 2px; }
+    .builder-row { display: flex; gap: 24px; margin-top: 16px; flex-wrap: wrap; }
+    .builder-stat { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; flex: 1; min-width: 180px; }
+    .builder-stat .bs-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; }
+    .builder-stat .bs-val { font-size: 0.9rem; font-weight: 700; color: var(--text); }
+    .builder-stat .bs-sub { font-size: 0.7rem; color: var(--muted); margin-top: 3px; }
+
     /* ── Footer ── */
     footer { max-width: 1100px; margin: 32px auto 0; font-size: 0.75rem; color: var(--muted); display: flex; justify-content: space-between; }
     footer a { color: var(--accent); text-decoration: none; }
@@ -156,10 +206,10 @@
 
 <header>
   <div>
-    <h1><span>Equi</span> — Fund Scoring Dashboard</h1>
-    <p>Systematic evaluation of opaque alternative funds · Built by Lambert (Chia-Chun Hsu)</p>
+    <h1><span>Equi</span> — Fund Data Pipeline</h1>
+    <p>Format-agnostic ingestion → normalization → scoring · Built by Lambert (Chia-Chun Hsu)</p>
   </div>
-  <span class="badge">Demo MVP · 2025</span>
+  <span class="badge">Demo MVP · 2026</span>
 </header>
 
 <div class="pipeline-log" id="pipeline-log">
@@ -192,6 +242,88 @@
     </div>
   </div>
 
+  <!-- Regime Stress Test — HOOK: show first -->
+  <div class="card">
+    <h2>Regime Stress Test — Does Low Correlation Hold in Crisis?</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px">
+      X: correlation when VIX ≤ 20 &nbsp;·&nbsp; Y: correlation when VIX &gt; 20 &nbsp;·&nbsp; Points <em>above</em> the diagonal = diversification fails exactly when you need it.
+    </p>
+    <div class="omap-legend" id="regime-legend">
+      <span><span class="dot" style="background:#3fb950"></span>RECOMMEND</span>
+      <span><span class="dot" style="background:#d29922"></span>WATCHLIST</span>
+      <span><span class="dot" style="background:#f85149"></span>PASS</span>
+      <span><span class="dot" style="background:#ff8c00;border:2px solid #ff8c00"></span>Regime Risk</span>
+    </div>
+    <div class="omap-wrap">
+      <canvas id="regimeScatter" height="110"></canvas>
+    </div>
+    <div id="regime-insight-box"></div>
+  </div>
+
+  <!-- Data Pipeline Architecture -->
+  <div class="card">
+    <h2>Data Pipeline Architecture</h2>
+
+    <!-- Input sources -->
+    <div class="arch-sources">
+      <div class="arch-source">📄 PDF / Email
+        <span>capital calls, quarterly reports, K-1s</span>
+      </div>
+      <div class="arch-source">🏛 Data Rooms
+        <span>Intralinks · Datasite · Juniper Square</span>
+      </div>
+      <div class="arch-source">🔌 Fund Admin API
+        <span>NAV feeds, CSV — SS&amp;C · Citco</span>
+      </div>
+      <div class="arch-source">📡 Market Data
+        <span>SPY · VIX · Bloomberg · HFR</span>
+      </div>
+    </div>
+    <div class="arch-arrow-down">↓</div>
+
+    <!-- Pipeline layers -->
+    <div class="arch-flow">
+      <div class="arch-layer">
+        <div class="arch-layer-name">Ingest</div>
+        <div class="arch-layer-desc">format detection · schema mapping · fault isolation</div>
+        <span class="arch-layer-badge">json · csv · dict · live</span>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-layer">
+        <div class="arch-layer-name">Transform</div>
+        <div class="arch-layer-desc">validation · NAV curve · SPY alignment · VIX regime labels</div>
+        <span class="arch-layer-badge">12-month rolling</span>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-layer">
+        <div class="arch-layer-name">Score</div>
+        <div class="arch-layer-desc">Sharpe · MaxDD · Sortino · regime correlation · composite rank</div>
+        <span class="arch-layer-badge">Copernicus-ready</span>
+      </div>
+    </div>
+    <div class="arch-arrow-down">↓</div>
+    <div class="arch-output">
+      Scored · Ranked · Auditable
+      <span>— swap Bloomberg / HFR data into the ingest layer: zero downstream code changes</span>
+    </div>
+
+    <!-- Properties -->
+    <div class="arch-props">
+      <div class="arch-prop">
+        <div class="arch-prop-title">⚡ Format-Agnostic</div>
+        <div class="arch-prop-desc">Transform and score only see <code style="font-size:0.7rem;color:var(--accent)">raw_returns[]</code>. Bloomberg feed or PDF parser slots into ingest only — one file changes.</div>
+      </div>
+      <div class="arch-prop">
+        <div class="arch-prop-title">🔄 Fault-Tolerant</div>
+        <div class="arch-prop-desc">Fund-level failures skip without crashing the pipeline. Live-to-fallback runs automatically on startup.</div>
+      </div>
+      <div class="arch-prop">
+        <div class="arch-prop-title">📊 Observable</div>
+        <div class="arch-prop-desc">Every run logs timing, format breakdown, and data source. See the pipeline trace above — that runs on every page load.</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Fund Ranking Table -->
   <div class="card">
     <h2>Fund Rankings</h2>
@@ -213,9 +345,40 @@
     </table>
   </div>
 
+  <!-- Restatement Propagation Simulation -->
+  <div class="card">
+    <h2>Restatement Propagation</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px">
+      GP corrects Apex Global Macro Month 8: <strong style="color:var(--text)">+1.8% → +0.7%</strong> (corporate action recalculation). Pipeline re-derives all downstream metrics automatically.
+    </p>
+    <div class="restate-grid">
+      <div class="restate-col">
+        <h3>Before Restatement</h3>
+        <div class="restate-row"><span class="metric">Month 8 NAV return</span><span class="before">+1.8%</span></div>
+        <div class="restate-row"><span class="metric">Annualized return</span><span class="before">+12.4%</span></div>
+        <div class="restate-row"><span class="metric">Sharpe ratio</span><span class="before">1.04</span></div>
+        <div class="restate-row"><span class="metric">Max drawdown</span><span class="before">−8.3%</span></div>
+        <div class="restate-row"><span class="metric">Composite score</span><span class="before">71.2</span></div>
+        <div class="restate-row"><span class="metric">Signal</span><span class="before" style="color:var(--green);font-weight:600">RECOMMEND</span></div>
+      </div>
+      <div class="restate-col">
+        <h3>After Restatement <span style="color:var(--muted);font-size:0.7rem;font-weight:400">↳ GP corrects Month 8: +1.8% → +0.7%</span></h3>
+        <div class="restate-row"><span class="metric">Month 8 NAV return</span><span class="after" style="color:var(--yellow)">+0.7% ↓</span></div>
+        <div class="restate-row"><span class="metric">Annualized return</span><span class="after" style="color:var(--yellow)">+10.8% ↓</span></div>
+        <div class="restate-row"><span class="metric">Sharpe ratio</span><span class="after" style="color:var(--yellow)">0.91 ↓</span></div>
+        <div class="restate-row"><span class="metric">Max drawdown</span><span class="after" style="color:var(--yellow)">−9.1% ↓</span></div>
+        <div class="restate-row"><span class="metric">Composite score</span><span class="after" style="color:var(--yellow)">66.5 ↓</span></div>
+        <div class="restate-row"><span class="metric">Signal</span><span class="after" style="color:var(--green)">RECOMMEND ✓ still passes</span></div>
+      </div>
+    </div>
+    <div class="insight" style="margin-top:16px">
+      <strong>Signal stayed RECOMMEND</strong> — but score dropped 71.2 → 66.5. A larger correction could flip the signal. Without automated propagation, stale scores sit in your system until someone updates a spreadsheet.
+    </div>
+  </div>
+
   <!-- Portfolio Analytics -->
   <div class="card">
-    <h2>Portfolio Analytics — RECOMMEND Tier vs SPY</h2>
+    <h2>Portfolio Analytics — RECOMMEND Tier vs SPY Benchmark</h2>
     <div class="compare-grid" id="compare-grid"></div>
     <canvas id="barChart" height="90"></canvas>
     <div class="insight" id="insight-box"></div>
@@ -223,34 +386,20 @@
 
   <!-- Fee Arbitrage -->
   <div class="card">
-    <h2>Equi's Alpha Layer 1 — Fee Arbitrage via Early-Stage Manager Access</h2>
+    <h2>Fee Arbitrage — Early Manager Access</h2>
     <p style="font-size:0.78rem;color:var(--muted);margin-bottom:18px;">
-      Tory Reiss has stated Equi negotiates manager fees down <strong style="color:var(--text)">50–60% on average</strong>
-      by approaching managers before institutional capital discovers them.
-      On a $1M allocation at 15% gross annual return, the fee savings compound significantly over 5 years.
+      Equi negotiates fees down <strong style="color:var(--text)">50–60%</strong> by entering before institutional capital. $1M · 15% gross · 5yr simulation below.
     </p>
     <div class="fee-stats" id="fee-stats"></div>
     <canvas id="feeChart" height="80"></canvas>
     <div class="insight" style="margin-top:16px" id="fee-insight"></div>
   </div>
 
-  <!-- Competitive Moat -->
-  <div class="card">
-    <h2>Why Equi — Competitive Differentiation</h2>
-    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:18px;">
-      iCapital and CAIS distribute other managers' products. PitchBook sells analytics to institutions.
-      Equi's scoring system <em>is</em> the investment process — that's a fundamentally different engineering problem.
-    </p>
-    <div class="moat-grid" id="moat-grid"></div>
-  </div>
-
   <!-- Manager Opportunity Map -->
   <div class="card">
-    <h2>Manager Opportunity Map — Equi's Entry Thesis</h2>
+    <h2>Manager Opportunity Map</h2>
     <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;">
-      The optimal Equi target: <strong style="color:var(--text)">proven track record, not yet discovered by institutional capital.</strong>
-      Funds in the shaded zone (Score ≥ 65, AUM &lt; $500M) have validated alpha but remain below the deployment minimum of large allocators.
-      Equi enters here — before pricing power shifts to the manager.
+      Shaded zone: Score ≥ 65, AUM &lt; $500M — proven alpha, not yet institutional scale. Equi's entry window.
     </p>
     <div class="omap-legend">
       <span><span class="dot" style="background:#3fb950"></span>RECOMMEND</span>
@@ -267,17 +416,96 @@
   <!-- Correlation Matrix -->
   <div class="card">
     <h2>Cross-Fund Correlation Matrix</h2>
-    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;">
-      Low cross-fund correlation = genuine diversification. This is Equi's core promise to investors.
-    </p>
     <div class="corr-wrap"><table class="corr-table" id="corr-table"></table></div>
+  </div>
+
+  <!-- Summer Build Roadmap -->
+  <div class="card">
+    <h2>What I'd Build This Summer — 10-Week Roadmap</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:4px">
+      Current demo handles JSON · CSV · live API. Real Equi fund data comes from three harder sources — each maps to a concrete engineering deliverable.
+    </p>
+    <table class="roadmap-table">
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th>Problem</th>
+          <th>What I'd ship</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="wk">Wk 1–3</td>
+          <td>
+            <div class="prob">GP quarterly reports arrive as PDFs
+              <span>capital calls, LP statements, K-1s — no structured API, all manual today</span>
+            </div>
+          </td>
+          <td>
+            <div class="sol">PDF extraction pipeline
+              <span>pdfplumber / camelot → NAV table detection → raw_returns[] · &lt;2s per doc</span>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td class="wk">Wk 4–7</td>
+          <td>
+            <div class="prob">Fund data locked in Intralinks / Datasite portals
+              <span>GP-authenticated data rooms — document retrieval is manual, no bulk API</span>
+            </div>
+          </td>
+          <td>
+            <div class="sol">Document retrieval pipeline + Airflow scheduler
+              <span>Intralinks API / Canoe Intelligence integration · daily freshness check · auto-ingest trigger</span>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td class="wk">Wk 8–10</td>
+          <td>
+            <div class="prob">NAV restatements require manual spreadsheet updates
+              <span>GP corrects a prior quarter → someone has to re-enter, re-score by hand</span>
+            </div>
+          </td>
+          <td>
+            <div class="sol">Version-controlled NAV layer + auto-recompute trigger
+              <span>PostgreSQL versioned rows · event-driven re-score · stale score detection alert</span>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Builder credentials -->
+    <div class="builder-row">
+      <div class="builder-stat">
+        <div class="bs-label">DA Capital — Systematic Futures</div>
+        <div class="bs-val">Sharpe +10–15%</div>
+        <div class="bs-sub">Max drawdown −8–12% · live trading pipeline</div>
+      </div>
+      <div class="builder-stat">
+        <div class="bs-label">BAT Mobile — Airflow on GCP</div>
+        <div class="bs-val">−50% compute</div>
+        <div class="bs-sub">ETL pipeline · production · same pattern as Wk 4–7 above</div>
+      </div>
+      <div class="builder-stat">
+        <div class="bs-label">Trilemma — On-chain Data</div>
+        <div class="bs-val">Non-standard data</div>
+        <div class="bs-sub">Unstructured sources → structured backtesting · stablecoin research</div>
+      </div>
+      <div class="builder-stat">
+        <div class="bs-label">UIUC Financial Engineering MS</div>
+        <div class="bs-val">Wrapping up 2026</div>
+        <div class="bs-sub">Available summer · looking for hands-on build, not coursework</div>
+      </div>
+    </div>
   </div>
 
 </div>
 
 <footer>
   <span>Lambert (Chia-Chun Hsu) · UIUC Financial Engineering · <a href="https://github.com/Hsu47/equi_demo" target="_blank">github.com/Hsu47/equi_demo</a></span>
-  <span>Data: simulated · Benchmark: SPY proxy 2023</span>
+  <span id="footer-data-note">Market data: Yahoo Finance · SPY + VIX live · ETF proxies for alt strategies</span>
 </footer>
 
 <script>
@@ -380,15 +608,46 @@ fetch('/api/funds').then(r => r.json()).then(funds => {
                 <span style="color:var(--muted);font-size:0.72rem;width:52px">${c.raw}</span>
               </div>`
             ).join('');
+            // Regime penalty row
+            const regimePenaltyRow = f.regime_risk_flag
+              ? `<div class="sc-row">
+                  <span class="sc-label" style="color:#ff8c00;width:130px">Regime Penalty</span>
+                  <div class="sc-bar-bg"><div class="sc-bar-fill" style="width:100%;background:#ff8c00"></div></div>
+                  <span class="sc-pts" style="color:#ff8c00">−10<span style="color:var(--muted);font-weight:400">/10</span></span>
+                  <span style="color:#ff8c00;font-size:0.72rem;width:72px">corr spikes</span>
+                 </div>`
+              : '';
+
+            // Regime detail
+            const regimeSection = (f.calm_corr != null)
+              ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid #21262d">
+                   <div style="font-size:0.74rem;color:var(--muted);font-weight:600;margin-bottom:6px">REGIME CORRELATION</div>
+                   <div style="font-size:0.78rem;line-height:1.9">
+                     <span style="color:var(--muted)">Calm (VIX ≤ 20):</span>
+                     <strong style="color:var(--green);margin-left:6px">${f.calm_corr.toFixed(3)}</strong>
+                     &nbsp;&nbsp;
+                     <span style="color:var(--muted)">Stress (VIX > 20):</span>
+                     <strong style="color:${f.stress_corr > 0.5 ? 'var(--red)' : 'var(--text)'};margin-left:6px">${f.stress_corr.toFixed(3)}</strong>
+                   </div>
+                   ${f.regime_risk_flag
+                     ? `<div style="margin-top:6px;font-size:0.78rem;color:#ff8c00;font-weight:600">
+                          ⚠️ Correlation spikes in stress (+${f.regime_shift.toFixed(3)} shift) — diversification may fail in crisis
+                        </div>`
+                     : `<div style="margin-top:4px;font-size:0.76rem;color:var(--green)">✓ Correlation stable across regimes (shift: ${(f.regime_shift||0).toFixed(3)})</div>`}
+                   ${f.regime_data_limited ? `<div style="font-size:0.71rem;color:var(--muted);margin-top:3px">⚠ Limited regime data — used full-period fallback</div>` : ''}
+                 </div>`
+              : '';
+
             return `<div class="breakdown-inner">
               <div class="bd-left">
                 <div style="font-size:0.75rem;color:var(--muted);margin-bottom:10px;font-weight:600">SCORE BREAKDOWN · ${f.score.toFixed(1)}/100</div>
-                <div class="score-components">${rows}</div>
+                <div class="score-components">${rows}${regimePenaltyRow}</div>
               </div>
               <div class="bd-right">
                 <div style="font-size:0.75rem;color:var(--muted);font-weight:600;margin-bottom:8px">HARD FLOOR EVALUATION</div>
                 <div>${whyNotRecommend(f)}</div>
                 ${f.aum_mm ? `<div style="margin-top:8px;font-size:0.73rem">AUM $${f.aum_mm}M · ${f.aum_mm < 500 ? '<span style="color:var(--gem)">below $500M institutional threshold</span>' : 'above institutional minimum'}</div>` : ''}
+                ${regimeSection}
               </div>
             </div>`;
           })()}
@@ -447,13 +706,7 @@ fetch('/api/portfolio').then(r => r.json()).then(d => {
 
   // Insight box
   document.getElementById('insight-box').innerHTML =
-    `<strong>Key insight:</strong> The RECOMMEND portfolio achieves Sharpe
-    <strong>${d.port_sharpe.toFixed(2)}</strong> vs SPY's
-    <strong>${d.spy_sharpe.toFixed(2)}</strong> — ${(d.port_sharpe / d.spy_sharpe).toFixed(1)}× better
-    risk-adjusted return with near-zero drawdown. This is Equi's core value proposition:
-    combining <strong>uncorrelated managers</strong> produces a portfolio that's genuinely
-    diversified, not just levered equity in disguise. The cross-fund correlations below
-    confirm these strategies don't move together.`;
+    `Portfolio Sharpe <strong>${d.port_sharpe.toFixed(2)}</strong> vs SPY <strong>${d.spy_sharpe.toFixed(2)}</strong> — ${(d.port_sharpe / d.spy_sharpe).toFixed(1)}× better risk-adjusted return. Cross-fund correlations below confirm strategies don't move together.`;
 
   // Correlation matrix
   const names = d.funds;
@@ -516,11 +769,7 @@ fetch('/api/fee_arbitrage').then(r => r.json()).then(d => {
   });
 
   document.getElementById('fee-insight').innerHTML =
-    `<strong>Fee arbitrage insight:</strong> On a $${(d.initial/1e6).toFixed(0)}M allocation at
-    ${d.gross_annual_pct}% gross annual return, Equi's negotiated fee structure (1% mgmt + 10% perf)
-    generates <strong>+${d.pct_uplift}% more</strong> than paying standard 2/20 over 5 years —
-    <strong>$${(d.fee_savings_5yr/1000).toFixed(0)}K in additional compounded return</strong>.
-    This is why accessing managers <em>before</em> they have pricing power is Equi's first-layer alpha.`;
+    `1% mgmt + 10% perf vs standard 2/20 → <strong>+${d.pct_uplift}% · $${(d.fee_savings_5yr/1000).toFixed(0)}K more</strong> per $1M over 5 years at ${d.gross_annual_pct}% gross.`;
 });
 
 // ── Pipeline Execution Log ────────────────────────────────────────────────────
@@ -628,15 +877,105 @@ fetch('/api/funds').then(r => r.json()).then(funds => {
   const gems = funds.filter(f => f.gem);
   const sweetSpot = funds.filter(f => f.score >= 65 && (f.aum_mm || 999) < 500);
   document.getElementById('omap-insight').innerHTML =
-    `<strong>Opportunity thesis:</strong> ${sweetSpot.length} fund${sweetSpot.length !== 1 ? 's' : ''} sit in the Equi Sweet Spot
-    (Score ≥ 65, AUM &lt; $500M). ${gems.length > 0
-      ? `<strong style="color:var(--gem)">${gems[0].name}</strong> is the standout —
-         composite score <strong>${gems[0].score.toFixed(1)}</strong> with only
-         $${gems[0].aum_mm}M AUM. At 15% gross returns, this manager has proven alpha
-         but hasn't hit institutional deployment minimums. That window is Equi's entry point.`
-      : 'No strong gems in current cohort.'}
-    As AUM grows past $500M, institutional allocators pile in — fees rise, capacity closes, alpha decays.
-    <strong>Equi's scoring pipeline exists precisely to find this window before it closes.</strong>`;
+    `${sweetSpot.length} fund${sweetSpot.length !== 1 ? 's' : ''} in the sweet spot (Score ≥ 65, AUM &lt; $500M). ${gems.length > 0
+      ? `<strong style="color:var(--gem)">${gems[0].name}</strong> — score ${gems[0].score.toFixed(1)}, $${gems[0].aum_mm}M AUM. Pre-institutional window.`
+      : 'No gems in current cohort.'}`;
+});
+
+// ── Regime Stress Test Scatter ────────────────────────────────────────────────
+fetch('/api/regime').then(r => r.json()).then(data => {
+  const funds = data.funds;
+  const vix   = data.vix_regime_summary;
+  const colorMap = { RECOMMEND: '#3fb950', WATCHLIST: '#d29922', PASS: '#f85149' };
+
+  const byRec = { RECOMMEND: [], WATCHLIST: [], PASS: [] };
+  funds.forEach(f => {
+    if (f.calm_correlation == null || f.stress_correlation == null) return;
+    byRec[f.rec] = byRec[f.rec] || [];
+    byRec[f.rec].push({
+      x: f.calm_correlation,
+      y: f.stress_correlation,
+      name: f.name,
+      shift: f.regime_shift,
+      flag: f.regime_risk_flag,
+      limited: f.regime_data_limited,
+    });
+  });
+
+  const datasets = ['RECOMMEND', 'WATCHLIST', 'PASS'].map(rec => ({
+    label: rec,
+    data: byRec[rec] || [],
+    backgroundColor: (byRec[rec] || []).map(d =>
+      d.flag ? 'rgba(255,140,0,0.85)' : colorMap[rec] + 'bb'),
+    pointRadius:      (byRec[rec] || []).map(d => d.flag ? 11 : 7),
+    pointHoverRadius: 13,
+    borderColor:      (byRec[rec] || []).map(d => d.flag ? '#ff8c00' : 'transparent'),
+    borderWidth:      (byRec[rec] || []).map(d => d.flag ? 2.5 : 0),
+  }));
+
+  // y=x diagonal line as an annotation dataset
+  const diagRange = [-0.6, 1.0];
+  datasets.push({
+    label: 'y = x (no regime shift)',
+    data: [{ x: diagRange[0], y: diagRange[0] }, { x: diagRange[1], y: diagRange[1] }],
+    type: 'line',
+    borderColor: 'rgba(139,148,158,0.4)',
+    borderDash: [5, 5],
+    borderWidth: 1.5,
+    pointRadius: 0,
+    fill: false,
+  });
+
+  new Chart(document.getElementById('regimeScatter'), {
+    type: 'scatter',
+    data: { datasets },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {
+          labels: {
+            color: '#8b949e', font: { size: 11 },
+            filter: item => item.text !== 'y = x (no regime shift)' || true,
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const d = ctx.raw;
+              if (!d.name) return null;
+              const flagStr = d.flag ? '  ⚠️ REGIME RISK' : '';
+              return `${d.name}  |  Calm: ${d.x.toFixed(3)}  |  Stress: ${d.y.toFixed(3)}  |  Shift: +${(d.shift||0).toFixed(3)}${flagStr}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Calm Correlation (VIX ≤ 20)', color: '#8b949e', font: { size: 11 } },
+          ticks: { color: '#8b949e' }, grid: { color: '#21262d' },
+          min: -0.6, max: 1.0,
+        },
+        y: {
+          title: { display: true, text: 'Stress Correlation (VIX > 20)', color: '#8b949e', font: { size: 11 } },
+          ticks: { color: '#8b949e' }, grid: { color: '#21262d' },
+          min: -0.6, max: 1.0,
+        },
+      }
+    }
+  });
+
+  // Insight box
+  const flagged = data.flagged_funds;
+  const insightBox = document.getElementById('regime-insight-box');
+  if (flagged.length > 0) {
+    insightBox.className = 'regime-insight';
+    insightBox.innerHTML =
+      `<strong>⚠ Regime risk:</strong> <strong>${flagged.join(', ')}</strong> — correlation spikes in stress (VIX &gt; 20). Diversification claim doesn't hold in crisis. <strong>−10 score penalty applied.</strong> Window: ${vix.calm_months} calm · ${vix.stress_months} stress months.`;
+  } else {
+    insightBox.className = 'regime-ok';
+    insightBox.innerHTML =
+      `<strong>✓ Stable across regimes</strong> — no fund crosses the +0.25 shift threshold. ${vix.calm_months} calm · ${vix.stress_months} stress months observed.`;
+  }
 });
 
 // ── Competitive Moat ──────────────────────────────────────────────────────────

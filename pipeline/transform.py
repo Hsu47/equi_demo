@@ -27,6 +27,46 @@ MONTHLY_RF = 0.05 / 12
 EXPECTED_MONTHS = 12
 
 # ---------------------------------------------------------------------------
+# Live VIX regime labels — fetched once, shared globally
+# ---------------------------------------------------------------------------
+
+def _fetch_vix_regime_labels() -> List[str]:
+    """
+    Fetch ^VIX monthly closing prices (trailing 13mo) from Yahoo Finance
+    and classify each of the most recent 12 months as 'calm' (VIX ≤ 20)
+    or 'stress' (VIX > 20).
+
+    Returns a list of 12 strings: 'calm' or 'stress'.
+    """
+    url = ("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX"
+           "?interval=1mo&range=13mo")
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(url, headers=headers, timeout=8)
+        r.raise_for_status()
+        closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        closes = [c for c in closes if c is not None]
+        closes = closes[-12:]           # keep most recent 12 months
+        labels = ["stress" if v > 20 else "calm" for v in closes]
+        stress_count = labels.count("stress")
+        print(f"[transform] VIX regime: fetched {len(labels)} months live "
+              f"({stress_count} stress, {len(labels)-stress_count} calm) ✓")
+        return labels
+    except Exception as e:
+        # Fallback: approximate 2024-2025 VIX monthly closes
+        fallback_vix = [18, 16, 22, 19, 31, 18, 17, 25, 20, 18, 19, 16]
+        labels = ["stress" if v > 20 else "calm" for v in fallback_vix]
+        stress_count = labels.count("stress")
+        print(f"[transform] VIX live fetch failed ({e}), using fallback "
+              f"({stress_count} stress, {len(labels)-stress_count} calm)")
+        return labels
+
+
+# Fetch once at import time — globally shared across all funds
+VIX_REGIME_LABELS: List[str] = _fetch_vix_regime_labels()
+
+
+# ---------------------------------------------------------------------------
 # Live SPY benchmark — same window as fund data
 # ---------------------------------------------------------------------------
 
@@ -141,6 +181,7 @@ def transform_fund(raw: dict) -> dict:
         "nav_curve": nav,
         "market_returns": SPY_MONTHLY_LIVE,
         "annualized_return": ann_return,
+        "regime_labels": VIX_REGIME_LABELS,   # 12-element list: 'calm' or 'stress'
     }
 
 

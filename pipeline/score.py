@@ -96,11 +96,56 @@ def pearson_correlation(x: List[float], y: List[float]) -> float:
 # Recommendation logic
 # ---------------------------------------------------------------------------
 
+def regime_correlations(fund_returns: List[float],
+                        market_returns: List[float],
+                        regime_labels: List[str]) -> dict:
+    """
+    Split fund and market monthly returns by VIX regime and compute
+    Pearson correlation separately for calm and stress periods.
+
+    Returns a dict with:
+      calm_correlation      — Pearson corr using only calm-month returns
+      stress_correlation    — Pearson corr using only stress-month returns
+      correlation_regime_shift — stress_corr - calm_corr
+      regime_risk_flag      — True if shift > 0.25
+      regime_data_limited   — True if either regime had < 3 months (used full-period fallback)
+      calm_months           — number of calm months used
+      stress_months         — number of stress months used
+    """
+    full_corr = pearson_correlation(fund_returns, market_returns)
+
+    calm_f, calm_m, stress_f, stress_m = [], [], [], []
+    for r_f, r_m, lbl in zip(fund_returns, market_returns, regime_labels):
+        if lbl == "calm":
+            calm_f.append(r_f); calm_m.append(r_m)
+        else:
+            stress_f.append(r_f); stress_m.append(r_m)
+
+    limited = len(calm_f) < 3 or len(stress_f) < 3
+
+    calm_corr   = pearson_correlation(calm_f, calm_m)   if len(calm_f) >= 3   else full_corr
+    stress_corr = pearson_correlation(stress_f, stress_m) if len(stress_f) >= 3 else full_corr
+
+    shift = round(stress_corr - calm_corr, 4)
+    risk_flag = shift > 0.25
+
+    return {
+        "calm_correlation":          round(calm_corr, 4),
+        "stress_correlation":        round(stress_corr, 4),
+        "correlation_regime_shift":  shift,
+        "regime_risk_flag":          risk_flag,
+        "regime_data_limited":       limited,
+        "calm_months":               len(calm_f),
+        "stress_months":             len(stress_f),
+    }
+
+
 def composite_score(sharpe: float,
                     drawdown: float,
                     sortino: float,
                     correlation: float,
-                    aum_mm: Optional[float]) -> float:
+                    aum_mm: Optional[float],
+                    regime_risk_flag: bool = False) -> float:
     """
     Weighted composite score (0–100) reflecting Equi's allocation priorities:
       40% Sharpe   — core risk-adjusted return quality (capped at Sharpe=3 → 100%)
@@ -109,6 +154,7 @@ def composite_score(sharpe: float,
       15% Sortino  — asymmetric upside vs downside (capped at Sortino=5)
 
     AUM below $50M applies a 15-point illiquidity penalty (institutional investability).
+    Regime risk flag applies a 10-point penalty (correlation spikes in stress).
     """
     sharpe_score = min(sharpe / 3.0, 1.0) * 100 if sharpe > 0 else 0.0
     dd_score = max(0.0, (1 + drawdown / 0.30)) * 100       # -30% DD → 0 pts
@@ -124,6 +170,10 @@ def composite_score(sharpe: float,
     # Illiquidity penalty for sub-scale funds
     if aum_mm is not None and aum_mm < 50:
         raw -= 15
+
+    # Regime risk penalty — correlation spikes in stress periods
+    if regime_risk_flag:
+        raw -= 10
 
     return round(max(0.0, min(100.0, raw)), 1)
 
@@ -173,7 +223,13 @@ def score_fund(fund: dict) -> dict:
     so = sortino_ratio(fund["monthly_returns"])
     so_display = round(so, 4) if so != float("inf") else 99.9
     corr = pearson_correlation(fund["monthly_returns"], fund["market_returns"])
-    cscore = composite_score(sr, dd, so_display, corr, fund.get("aum_mm"))
+
+    # Regime-conditional correlation analysis
+    regime_labels = fund.get("regime_labels", ["calm"] * 12)
+    reg = regime_correlations(fund["monthly_returns"], fund["market_returns"], regime_labels)
+
+    cscore = composite_score(sr, dd, so_display, corr, fund.get("aum_mm"),
+                             regime_risk_flag=reg["regime_risk_flag"])
     rec = recommend(sr, dd, corr, cscore)
 
     return {
@@ -185,6 +241,14 @@ def score_fund(fund: dict) -> dict:
         "composite_score": cscore,
         "annualized_return": round(fund["annualized_return"] * 100, 2),  # as %
         "recommendation": rec,
+        # Regime analysis fields
+        "calm_correlation":         reg["calm_correlation"],
+        "stress_correlation":       reg["stress_correlation"],
+        "correlation_regime_shift": reg["correlation_regime_shift"],
+        "regime_risk_flag":         reg["regime_risk_flag"],
+        "regime_data_limited":      reg["regime_data_limited"],
+        "calm_months":              reg["calm_months"],
+        "stress_months":            reg["stress_months"],
     }
 
 

@@ -73,22 +73,72 @@ def api_funds():
     out = []
     for rank, f in enumerate(scored, 1):
         out.append({
-            "rank":         rank,
-            "fund_id":      f["fund_id"],
-            "name":         f["name"],
-            "aum_mm":       f.get("aum_mm"),
-            "ann_return":   f["annualized_return"],
-            "sharpe":       f["sharpe_ratio"],
-            "max_dd":       f["max_drawdown"],
-            "sortino":      f["sortino_ratio"],
-            "corr":         f["market_correlation"],
-            "score":        f["composite_score"],
-            "rec":          f["recommendation"],
-            "gem":          f.get("gem", False),
-            "gem_tier":     "strong" if (f.get("composite_score",0) >= 85 and (f.get("aum_mm") or 999) < 500)
-                            else ("emerging" if f.get("gem") else None),
+            "rank":                   rank,
+            "fund_id":                f["fund_id"],
+            "name":                   f["name"],
+            "aum_mm":                 f.get("aum_mm"),
+            "ann_return":             f["annualized_return"],
+            "sharpe":                 f["sharpe_ratio"],
+            "max_dd":                 f["max_drawdown"],
+            "sortino":                f["sortino_ratio"],
+            "corr":                   f["market_correlation"],
+            "score":                  f["composite_score"],
+            "rec":                    f["recommendation"],
+            "gem":                    f.get("gem", False),
+            "gem_tier":               "strong" if (f.get("composite_score",0) >= 85 and (f.get("aum_mm") or 999) < 500)
+                                      else ("emerging" if f.get("gem") else None),
+            # Regime-conditional correlation fields
+            "calm_corr":              f.get("calm_correlation"),
+            "stress_corr":            f.get("stress_correlation"),
+            "regime_shift":           f.get("correlation_regime_shift"),
+            "regime_risk_flag":       f.get("regime_risk_flag", False),
+            "regime_data_limited":    f.get("regime_data_limited", False),
         })
     return jsonify(out)
+
+
+@app.route("/api/regime")
+def api_regime():
+    """
+    Regime-conditional correlation analysis for all funds.
+    Returns per-fund calm/stress correlation data, VIX regime summary,
+    and a list of funds flagged for regime risk.
+    """
+    from pipeline.transform import VIX_REGIME_LABELS
+
+    calm_count   = VIX_REGIME_LABELS.count("calm")
+    stress_count = VIX_REGIME_LABELS.count("stress")
+
+    fund_data = []
+    flagged   = []
+    for f in scored:
+        entry = {
+            "fund_id":             f["fund_id"],
+            "name":                f["name"],
+            "rec":                 f["recommendation"],
+            "full_correlation":    f["market_correlation"],
+            "calm_correlation":    f.get("calm_correlation"),
+            "stress_correlation":  f.get("stress_correlation"),
+            "regime_shift":        f.get("correlation_regime_shift"),
+            "regime_risk_flag":    f.get("regime_risk_flag", False),
+            "regime_data_limited": f.get("regime_data_limited", False),
+            "calm_months":         f.get("calm_months", 0),
+            "stress_months":       f.get("stress_months", 0),
+        }
+        fund_data.append(entry)
+        if f.get("regime_risk_flag"):
+            flagged.append(f["name"])
+
+    return jsonify({
+        "vix_regime_summary": {
+            "total_months":  len(VIX_REGIME_LABELS),
+            "calm_months":   calm_count,
+            "stress_months": stress_count,
+            "labels":        VIX_REGIME_LABELS,
+        },
+        "funds":             fund_data,
+        "flagged_funds":     flagged,
+    })
 
 
 @app.route("/api/portfolio")
