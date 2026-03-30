@@ -1,10 +1,12 @@
 """
 PDF Ingest — extract monthly NAV returns from LP quarterly/annual reports.
 
-Handles the most common LP statement format:
-  - Table with columns: Month | Net Return (%) | ...
-  - Searches all pages for a performance table
-  - Returns a normalized fund dict matching the standard ingest schema
+Handles multiple common LP statement formats:
+  - Vertical table:  Month | Net Return (%) | ...
+  - Horizontal/calendar table: rows=months, cols=years
+  - Date variants: "January 2025", "Jan 2025", "2025-01", "01/2025"
+  - Summary/factsheet format: extract available period returns (1-Mth, YTD, etc.)
+  - Fallback to raw text scanning when table extraction fails
 
 Usage:
     from pipeline.ingest_pdf import load_fund_from_pdf
@@ -26,9 +28,38 @@ _MONTH_KEYWORDS = {
     "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
 }
 
+# ISO / numeric date patterns:  2025-01, 01/2025, 1/2025
+_DATE_PATTERN = re.compile(
+    r"(\d{4})[-/](\d{1,2})"   # 2025-01
+    r"|(\d{1,2})/(\d{4})"     # 01/2025
+)
+
 _FUND_NAME_LABELS = ("fund name", "fund:", "managed by", "fund lp", "capital fund", "macro fund")
 _AUM_LABELS       = ("ending nav", "ending capital", "total nav", "fund aum")
 _PERIOD_LABELS    = ("reporting period", "period:", "for the period")
+
+# Expanded header detection — covers most LP report variants
+_RETURN_HEADER_KEYWORDS = {
+    "net return", "monthly return", "performance", "return (%)",
+    "net ror", "monthly p&l", "return (net)", "net perf",
+    "nav change", "net of fees", "return(%)", "net ret",
+    "monthly ror", "period return", "monthly net",
+    "gross return", "net return", "calendar year",
+    "monthly returns", "net performance",
+}
+
+# Cells that represent missing data (not errors)
+_SKIP_CELLS = {"", "-", "—", "–", "n/a", "na", "null", "none", "*", "—-"}
+
+# Summary/factsheet period labels (for non-LP-report PDFs)
+_SUMMARY_PERIOD_LABELS = {
+    "1-mth", "1 mth", "1 month", "1-month", "1m",
+    "3-mth", "3 mth", "3 month", "3-month", "3m",
+    "6-mth", "6 mth", "6 month", "6-month", "6m",
+    "ytd", "1-yr", "1 yr", "1 year", "1-year",
+    "3-yr", "3 yr", "5-yr", "5 yr", "10-yr", "10 yr",
+    "since inception",
+}
 
 
 def _extract_text_and_tables(path: str):
@@ -48,20 +79,57 @@ def _find_fund_name(text: str) -> str:
     """Extract fund name from header text."""
     for line in text.splitlines():
         line_l = line.lower()
+        # Skip lines that are clearly not fund names
+        if any(skip in line_l for skip in ("inception", "expense", "cusip", "listing")):
+            continue
         if any(kw in line_l for kw in ("fund lp", "fund, lp", "capital lp", "macro fund", "credit fund")):
             return line.strip()
-        if "fund" in line_l and len(line.split()) <= 8 and len(line) > 8:
+    # Second pass: look for "ETF" or "Fund" in short lines
+    for line in text.splitlines():
+        line_l = line.lower()
+        if any(skip in line_l for skip in ("inception", "expense", "cusip", "listing", "return")):
+            continue
+        if ("etf" in line_l or "fund" in line_l) and len(line.split()) <= 8 and len(line) > 8:
             return line.strip()
     return "Unknown Fund"
 
 
+def _derive_ticker(fund_name: str, file_path: str) -> str:
+    """
+    Generate a meaningful ticker from the fund name.
+    E.g. "Meridian Global Macro Fund LP" → "MGMF"
+    Falls back to filename-based ticker if name is unknown.
+    """
+    if fund_name and fund_name != "Unknown Fund":
+        # Take first letter of each significant word (skip articles, suffixes)
+        skip = {"lp", "llc", "inc", "ltd", "the", "a", "an", "of", "and", "fund", "capital"}
+        words = fund_name.split()
+        initials = [w[0].upper() for w in words
+                    if w.lower() not in skip and len(w) > 1]
+        if len(initials) >= 2:
+            return "".join(initials)[:6]
+    # Fallback: filename
+    return os.path.splitext(os.path.basename(file_path))[0].upper()[:8]
+
+
 def _find_aum(text: str):
-    """Extract ending NAV / AUM from text — requires explicit $ sign to avoid date false positives."""
-    for line in text.splitlines():
+    """
+    Extract ending NAV / AUM from text.
+    Handles both single-line ("Ending NAV ... $2,660,284.00") and
+    line-continuation cases where the $ amount is on the next line.
+    """
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
         line_l = line.lower()
         if any(lbl in line_l for lbl in _AUM_LABELS):
-            # Must have an explicit $ to distinguish from dates like "Dec 31"
+            # Try current line first
             m = re.search(r"\$([\d,]+(?:\.\d{2})?)", line)
+            # If not found, try the next line (line-continuation from pdfplumber)
+            if not m and i + 1 < len(lines):
+                m = re.search(r"\$([\d,]+(?:\.\d{2})?)", lines[i + 1])
+            # Also try: label line ends with $ and amount is at start of next line
+            if not m and line.rstrip().endswith("$") and i + 1 < len(lines):
+                m = re.search(r"^([\d,]+(?:\.\d{2})?)", lines[i + 1].strip())
             if m:
                 try:
                     val = float(m.group(1).replace(",", ""))
@@ -72,28 +140,146 @@ def _find_aum(text: str):
     return None
 
 
-def _parse_return_from_row(cells):
-    """Extract a monthly return float from a table row's cells. Returns float or None."""
+def _is_month_cell(cell_text: str) -> bool:
+    """Check if a cell contains a month reference (name or ISO date)."""
+    cell_l = cell_text.lower().strip()
+    if any(kw in cell_l for kw in _MONTH_KEYWORDS):
+        return True
+    if _DATE_PATTERN.search(cell_text):
+        return True
+    return False
+
+
+def _normalize_cell(cell) -> str:
+    """Normalize a table cell value for return parsing."""
+    if cell is None:
+        return ""
+    s = str(cell).strip()
+    # Remove percentage signs, plus signs, whitespace variants
+    s = s.replace("%", "").replace("+", "").replace("\u00a0", " ").strip()
+    return s
+
+
+def _is_skip_cell(cell_text: str) -> bool:
+    """Check if a cell represents intentionally missing data."""
+    return cell_text.lower().strip() in _SKIP_CELLS
+
+
+def _parse_return_from_row(cells, diagnostics=None):
+    """
+    Extract a monthly return float from a table row's cells.
+    Returns (float, None) on success or (None, str) with reason on failure.
+    """
     for cell in cells[1:]:
-        clean = cell.replace("%", "").replace("+", "").strip()
+        clean = _normalize_cell(cell)
+        if not clean or _is_skip_cell(clean):
+            continue
         try:
             val = float(clean)
             if -20 <= val <= 20:
-                return val / 100.0
+                return val / 100.0, None
         except ValueError:
+            if diagnostics is not None:
+                diagnostics.append(f"unparseable cell: '{clean}'")
             continue
+    return None, f"no valid return in cells: {[_normalize_cell(c) for c in cells]}"
+
+
+def _is_header_row(row_text: str) -> bool:
+    """Check if a row is a performance table header."""
+    row_lower = row_text.lower()
+    return any(kw in row_lower for kw in _RETURN_HEADER_KEYWORDS)
+
+
+def _detect_horizontal_table(table):
+    """
+    Detect horizontal/calendar format where:
+      - First column has month names
+      - Other columns are years (2023, 2024, 2025, ...)
+    Returns the year-column index for the most recent year, or None.
+    """
+    if not table or len(table) < 2:
+        return None
+    header = [str(c or "").strip() for c in table[0]]
+    year_cols = {}
+    for idx, cell in enumerate(header):
+        # Match "2024", "2025 YTD", etc.
+        m = re.match(r"^(20\d{2})", cell)
+        if m:
+            year_cols[int(m.group(1))] = idx
+    if year_cols:
+        return year_cols[max(year_cols)]  # most recent year column
     return None
 
 
-def _extract_monthly_returns_from_tables(tables: list):
+def _is_numeric_table(table, threshold=0.4):
+    """
+    Heuristic: detect if a table is mostly numeric (potential return table)
+    even without explicit header keywords.
+    Returns True if >threshold of data cells are numeric.
+    """
+    if not table or len(table) < 3:
+        return False
+    numeric_count = 0
+    total_count = 0
+    for row in table[1:]:  # skip header
+        for cell in row[1:]:  # skip first column (labels)
+            clean = _normalize_cell(cell)
+            if not clean or _is_skip_cell(clean):
+                continue
+            total_count += 1
+            try:
+                float(clean)
+                numeric_count += 1
+            except ValueError:
+                pass
+    if total_count == 0:
+        return False
+    return (numeric_count / total_count) >= threshold
+
+
+def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
     """
     Find the performance table across all tables and extract monthly returns.
-    Handles the case where pdfplumber splits the table across pages into multiple tables.
-    Returns list of floats (decimal) e.g. [0.0182, -0.0091, ...]
+    Supports:
+      - Standard vertical format (Month | Return | ...)
+      - Horizontal/calendar format (Month | 2023 | 2024 | 2025)
+      - ISO date cells (2025-01, 01/2025)
+      - Numeric-heavy tables without standard headers
+
+    Returns (list[float], list[str]) — returns and any extraction warnings.
     """
     all_returns = []
+    warnings = []
+    diagnostics["tables_inspected"] = len(tables)
+    diagnostics["rows_scanned"] = 0
+    diagnostics["rows_matched"] = 0
+    diagnostics["rows_skipped"] = 0
 
-    for table in tables:
+    for table_idx, table in enumerate(tables):
+        # Check for horizontal/calendar format first
+        year_col = _detect_horizontal_table(table)
+        if year_col is not None:
+            table_returns = []
+            for row in table[1:]:  # skip header
+                cells = [str(c or "").strip() for c in row]
+                diagnostics["rows_scanned"] += 1
+                if not cells or not _is_month_cell(cells[0]):
+                    diagnostics["rows_skipped"] += 1
+                    continue
+                if year_col < len(cells):
+                    val, err = _parse_return_from_row(["_placeholder_", cells[year_col]])
+                    if val is not None:
+                        table_returns.append(val)
+                        diagnostics["rows_matched"] += 1
+                    elif err:
+                        diagnostics["rows_skipped"] += 1
+                        warnings.append(f"table[{table_idx}] horizontal row skip: {err}")
+            if len(table_returns) >= 6:
+                all_returns = table_returns
+                continue
+
+        # Standard vertical format
         table_returns = []
         has_month_col = False
 
@@ -101,20 +287,28 @@ def _extract_monthly_returns_from_tables(tables: list):
             if not row:
                 continue
             cells = [str(c or "").strip() for c in row]
-            row_text = " ".join(cells).lower()
+            row_text = " ".join(cells)
+            diagnostics["rows_scanned"] += 1
 
             # Detect header row — marks this table as a performance table
-            if any(kw in row_text for kw in ("net return", "monthly return", "performance", "return (%)")):
+            if _is_header_row(row_text):
                 has_month_col = True
                 continue
 
-            first_cell = cells[0].lower() if cells else ""
-            is_month_row = any(kw in first_cell for kw in _MONTH_KEYWORDS)
+            first_cell = cells[0] if cells else ""
+            is_month_row = _is_month_cell(first_cell)
 
             if is_month_row or has_month_col:
-                val = _parse_return_from_row(cells)
+                cell_diag = []
+                val, err = _parse_return_from_row(cells, diagnostics=cell_diag)
                 if val is not None:
                     table_returns.append(val)
+                    diagnostics["rows_matched"] += 1
+                elif err and is_month_row:
+                    diagnostics["rows_skipped"] += 1
+                    warnings.append(f"table[{table_idx}] row parse fail: {err}")
+                    if cell_diag:
+                        warnings.extend(cell_diag)
 
         # Accept this table if it has 6+ months (main table) or 1-5 months (continuation)
         if len(table_returns) >= 6:
@@ -122,19 +316,26 @@ def _extract_monthly_returns_from_tables(tables: list):
         elif 1 <= len(table_returns) <= 5 and all_returns:
             all_returns.extend(table_returns)  # continuation rows (split across pages)
 
-    return all_returns
+    return all_returns, warnings
 
 
-def _extract_monthly_returns_from_text(text: str):
+def _extract_monthly_returns_from_text(text: str, diagnostics: dict):
     """
     Fallback: scan raw text for month-return pairs when table extraction fails.
+    Returns (list[float], list[str]) — returns and warnings.
     """
     returns = []
+    warnings = []
     lines = text.splitlines()
+    lines_scanned = 0
 
     for line in lines:
         line_l = line.lower()
-        if any(kw in line_l for kw in _MONTH_KEYWORDS):
+        has_month = any(kw in line_l for kw in _MONTH_KEYWORDS)
+        has_date = _DATE_PATTERN.search(line) is not None
+
+        if has_month or has_date:
+            lines_scanned += 1
             m = _RETURN_PATTERN.search(line)
             if m:
                 try:
@@ -142,9 +343,90 @@ def _extract_monthly_returns_from_text(text: str):
                     if -20 <= val <= 20:
                         returns.append(val / 100.0)
                 except ValueError:
-                    pass
+                    warnings.append(f"text parse fail: {line.strip()[:60]}")
 
-    return returns
+    diagnostics["text_lines_scanned"] = lines_scanned
+    return returns, warnings
+
+
+def _parse_period_header(header_text: str) -> list:
+    """Parse a period header line into a list of period keys."""
+    period_map = []
+    text_l = header_text.lower()
+    # Scan the entire line with regex to find period labels in order
+    patterns = [
+        (r"1[\s-]?m(?:th|onths?)\b", "1_month"),
+        (r"3[\s-]?m(?:th|onths?)\b", "3_month"),
+        (r"6[\s-]?m(?:th|onths?)\b", "6_month"),
+        (r"\bytd\b",                  "ytd"),
+        (r"1[\s-]?y(?:r|ear)\b",     "1_year"),
+        (r"3[\s-]?y(?:r|ear)\b",     "3_year"),
+        (r"5[\s-]?y(?:r|ear)\b",     "5_year"),
+        (r"7[\s-]?y(?:r|ear)\b",     "7_year"),
+        (r"10[\s-]?y(?:r|ear)\b",    "10_year"),
+        (r"inception",               "since_inception"),
+    ]
+    # Find all matches with their positions, then sort by position
+    found = []
+    for pat, key in patterns:
+        m = re.search(pat, text_l)
+        if m:
+            found.append((m.start(), key))
+    found.sort()
+    period_map = [key for _, key in found]
+    return period_map
+
+
+def _extract_summary_performance(text: str) -> dict:
+    """
+    Extract summary performance data from factsheet-format PDFs.
+    Scans for period header lines (e.g., "1 Month  3 Months  1 Year")
+    then maps percentage values from nearby return lines.
+
+    Returns dict with available period returns, e.g.:
+    {"1_month": 0.024, "1_year": 0.28, "ytd": 0.134}
+    """
+    summary = {}
+    lines = text.splitlines()
+
+    # First pass: find period header lines
+    header_indices = []
+    for i, line in enumerate(lines):
+        line_l = line.lower()
+        periods = _parse_period_header(line)
+        if len(periods) >= 2:
+            header_indices.append((i, periods))
+
+    if not header_indices:
+        return summary
+
+    # Second pass: for each header, find the best return line within ±4 lines
+    return_keywords = {"net return", "net ret", "nav", "net performance"}
+
+    for header_idx, periods in header_indices:
+        # Search lines near the header for return data
+        search_start = header_idx + 1
+        search_end = min(header_idx + 5, len(lines))
+
+        for j in range(search_start, search_end):
+            line = lines[j]
+            line_l = line.lower()
+            pcts = re.findall(r"([+-]?\d{1,3}\.\d{1,2})\s*%", line)
+            if not pcts:
+                continue
+
+            # Prefer "net return" / "NAV" lines; accept any line with enough %s
+            is_net = any(kw in line_l for kw in return_keywords)
+            has_enough = len(pcts) >= len(periods) * 0.5
+
+            if is_net or has_enough:
+                for k, pct in enumerate(pcts):
+                    if k < len(periods):
+                        summary[periods[k]] = float(pct) / 100.0
+                if is_net:
+                    break  # prefer net over gross, stop searching
+
+    return summary
 
 
 def load_fund_from_pdf(path: str) -> dict:
@@ -160,15 +442,21 @@ def load_fund_from_pdf(path: str) -> dict:
             "source_format": "pdf",
             "source_path":   str,
             "extraction": {
-                "pages_scanned": int,
-                "tables_found":  int,
-                "method":        "table" | "text" | "failed",
-                "returns_count": int,
+                "pages_scanned":    int,
+                "tables_found":     int,
+                "tables_inspected": int,
+                "rows_scanned":     int,
+                "rows_matched":     int,
+                "rows_skipped":     int,
+                "method":           "table" | "text" | "summary" | "failed",
+                "returns_count":    int,
+                "warnings":         list[str],
+                "summary_perf":     dict | None,
             }
         }
 
     Raises:
-        ValueError if fewer than 3 months of returns found.
+        ValueError if fewer than 3 months of returns found AND no summary data.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"PDF not found: {path}")
@@ -181,27 +469,43 @@ def load_fund_from_pdf(path: str) -> dict:
 
     fund_name = _find_fund_name(text)
     aum_mm    = _find_aum(text)
+    ticker    = _derive_ticker(fund_name, path)
+
+    diagnostics = {}
 
     # Try table extraction first, fall back to text scan
-    returns = _extract_monthly_returns_from_tables(tables)
-    method  = "table"
+    returns, warnings = _extract_monthly_returns_from_tables(tables, diagnostics)
+    method = "table"
     if len(returns) < 3:
-        returns = _extract_monthly_returns_from_text(text)
-        method  = "text"
+        returns, text_warnings = _extract_monthly_returns_from_text(text, diagnostics)
+        warnings.extend(text_warnings)
+        method = "text"
+
+    # Always try summary extraction (useful supplementary data for factsheets)
+    summary_perf = _extract_summary_performance(text) or None
+
+    # If monthly returns insufficient, use summary as primary method
     if len(returns) < 3:
-        method = "failed"
+        if summary_perf:
+            method = "summary"
+            # Use 1-month return as a single data point if available
+            if "1_month" in summary_perf:
+                returns = [summary_perf["1_month"]]
+        else:
+            method = "failed"
 
     # Take last 12 months if more than 12 found
     returns = returns[-12:]
 
-    if len(returns) < 3:
+    if len(returns) < 3 and not summary_perf:
         raise ValueError(
             f"Insufficient return data extracted from {path}: "
-            f"found {len(returns)} months (need ≥ 3)"
+            f"found {len(returns)} months (need >= 3). "
+            f"Tables inspected: {diagnostics.get('tables_inspected', 0)}, "
+            f"Rows scanned: {diagnostics.get('rows_scanned', 0)}, "
+            f"Rows matched: {diagnostics.get('rows_matched', 0)}. "
+            f"Warnings: {warnings}"
         )
-
-    # Derive ticker-like id from file name
-    ticker = os.path.splitext(os.path.basename(path))[0].upper()[:8]
 
     return {
         "fund_id":       ticker,
@@ -212,10 +516,16 @@ def load_fund_from_pdf(path: str) -> dict:
         "source_format": "pdf",
         "source_path":   path,
         "extraction": {
-            "pages_scanned": pages_scanned,
-            "tables_found":  len(tables),
-            "method":        method,
-            "returns_count": len(returns),
+            "pages_scanned":    pages_scanned,
+            "tables_found":     len(tables),
+            "tables_inspected": diagnostics.get("tables_inspected", 0),
+            "rows_scanned":     diagnostics.get("rows_scanned", 0),
+            "rows_matched":     diagnostics.get("rows_matched", 0),
+            "rows_skipped":     diagnostics.get("rows_skipped", 0),
+            "method":           method,
+            "returns_count":    len(returns),
+            "warnings":         warnings,
+            "summary_perf":     summary_perf,
         },
     }
 
@@ -227,4 +537,4 @@ if __name__ == "__main__":
     result = load_fund_from_pdf(path)
     ext = result.pop("extraction")
     print(json.dumps(result, indent=2))
-    print(f"\nExtraction metadata: {ext}")
+    print(f"\nExtraction metadata: {json.dumps(ext, indent=2)}")
