@@ -17,7 +17,7 @@ import time
 import datetime
 sys.path.insert(0, os.path.dirname(__file__))
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, send_from_directory
 from pipeline.ingest import load_all_funds
 from pipeline.ingest_live import load_live_funds
 from pipeline.transform import transform_all
@@ -285,6 +285,65 @@ def api_moat():
             "icon": "🌙",
         },
     ])
+
+
+@app.route("/static/<path:filename>")
+def static_files(filename):
+    return send_from_directory(
+        os.path.join(os.path.dirname(__file__), "static"), filename
+    )
+
+
+@app.route("/api/pdf_demo")
+def api_pdf_demo():
+    """Live PDF extraction demo: parse sample LP report → transform → score."""
+    import time as _time
+    from pipeline.ingest_pdf import load_fund_from_pdf
+    from pipeline.transform import transform_fund
+    from pipeline.score import (composite_score, sharpe_ratio, max_drawdown,
+                                 sortino_ratio, pearson_correlation)
+    from pipeline.transform import SPY_MONTHLY_LIVE
+
+    pdf_path = os.path.join(os.path.dirname(__file__), "static", "sample_lp_report.pdf")
+
+    t0 = _time.time()
+    try:
+        fund_raw  = load_fund_from_pdf(pdf_path)
+        t_extract = round((_time.time() - t0) * 1000, 1)
+
+        transformed = transform_fund(fund_raw)
+        returns     = transformed["excess_returns"]
+        spy         = transformed.get("market_returns") or SPY_MONTHLY_LIVE[:len(returns)]
+
+        from pipeline.score import recommend as score_recommend
+        sharpe  = sharpe_ratio(returns)
+        dd      = max_drawdown(transformed["nav_curve"])
+        sortino = sortino_ratio(returns)
+        corr    = pearson_correlation(returns, spy[:len(returns)])
+        # composite_score(sharpe, drawdown, sortino, correlation, aum_mm)
+        score   = composite_score(sharpe, dd, sortino, corr,
+                                  aum_mm=fund_raw.get("aum_mm"))
+        signal  = score_recommend(sharpe, dd, corr, score)
+
+        return jsonify({
+            "status":        "success",
+            "fund_name":     fund_raw["name"],
+            "aum_mm":        fund_raw["aum_mm"],
+            "source_format": "pdf",
+            "extraction":    fund_raw["extraction"],
+            "extract_ms":    t_extract,
+            "raw_returns_preview": [round(r * 100, 2) for r in fund_raw["raw_returns"]],
+            "metrics": {
+                "sharpe":   round(sharpe,  3),
+                "max_dd":   round(dd,      3),
+                "sortino":  round(sortino, 3),
+                "corr_spy": round(corr,    3),
+                "score":    score,
+                "signal":   signal,
+            },
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 if __name__ == "__main__":

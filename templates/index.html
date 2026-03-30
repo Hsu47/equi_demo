@@ -181,6 +181,21 @@
     .pipeline-log .sep  { color: #30363d; }
     .pipeline-log .ts   { margin-left: auto; opacity: 0.45; font-size: 0.68rem; }
 
+    /* ── PDF Demo ── */
+    .pdf-btn { background: var(--accent); color: #0d1117; border: none; padding: 8px 22px; border-radius: 6px; font-size: 0.82rem; font-weight: 700; cursor: pointer; transition: opacity 0.15s; letter-spacing: .02em; }
+    .pdf-btn:hover { opacity: 0.85; }
+    .pdf-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .pdf-result { margin-top: 20px; display: none; }
+    .pdf-result.visible { display: block; }
+    .pdf-section-label { font-size: 0.72rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
+    .returns-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+    .ret-cell { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 6px 4px; text-align: center; font-size: 0.74rem; font-family: "SF Mono","Fira Code",monospace; }
+    .ret-pos { color: #3fb950; } .ret-neg { color: #f85149; }
+    .pdf-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+    .pdf-metric { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; text-align: center; }
+    .pdf-metric .pm-val { font-size: 1.25rem; font-weight: 700; }
+    .pdf-metric .pm-lbl { font-size: 0.7rem; color: var(--muted); margin-top: 3px; }
+
     /* ── Build Roadmap ── */
     .roadmap-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-top: 16px; }
     .roadmap-table th { text-align: left; padding: 8px 14px; color: var(--muted); font-weight: 500; font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); }
@@ -417,6 +432,25 @@
   <div class="card">
     <h2>Cross-Fund Correlation Matrix</h2>
     <div class="corr-wrap"><table class="corr-table" id="corr-table"></table></div>
+  </div>
+
+  <!-- PDF Extraction Demo -->
+  <div class="card">
+    <h2>PDF Extraction — Live Parser</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px">
+      Parsing <strong style="color:var(--text)">Meridian Global Macro Fund LP · 2025 Annual Statement</strong>
+      &nbsp;·&nbsp; <a href="/static/sample_lp_report.pdf" target="_blank" style="color:var(--accent);font-size:0.75rem">view PDF ↗</a>
+      &nbsp;·&nbsp; <span style="color:var(--muted);font-size:0.75rem">pdfplumber · table extraction · format: <code style="color:var(--accent)">pdf</code></span>
+    </p>
+    <button class="pdf-btn" id="pdf-parse-btn" onclick="runPdfDemo()">▶ Parse LP Report PDF</button>
+
+    <div class="pdf-result" id="pdf-result">
+      <div style="font-size:0.8rem;margin-bottom:14px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px" id="pdf-meta"></div>
+      <div class="pdf-section-label">12 monthly returns extracted</div>
+      <div class="returns-grid" id="pdf-returns"></div>
+      <div class="pdf-section-label" style="margin-top:16px">pipeline output — scored</div>
+      <div class="pdf-metrics" id="pdf-metrics"></div>
+    </div>
   </div>
 
   <!-- Summer Build Roadmap -->
@@ -991,6 +1025,55 @@ fetch('/api/moat').then(r => r.json()).then(items => {
       </div>`;
   });
 });
+
+// ── PDF Demo ──────────────────────────────────────────────────────────────────
+function runPdfDemo() {
+  const btn = document.getElementById('pdf-parse-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Parsing PDF…';
+
+  fetch('/api/pdf_demo').then(r => r.json()).then(d => {
+    if (d.status !== 'success') {
+      btn.textContent = '✗ ' + d.message;
+      btn.disabled = false;
+      return;
+    }
+    btn.textContent = '✓ Parsed';
+
+    const recColor = { RECOMMEND: '#3fb950', WATCHLIST: '#d29922', PASS: '#f85149' };
+    const m = d.metrics;
+
+    document.getElementById('pdf-meta').innerHTML =
+      `<span style="color:var(--green);font-weight:600">✓ ${d.fund_name}</span>`+
+      `&nbsp;·&nbsp; AUM <strong>$${d.aum_mm}M</strong>`+
+      `&nbsp;·&nbsp; method: <code style="color:var(--accent)">${d.extraction.method}</code>`+
+      `&nbsp;·&nbsp; ${d.extraction.returns_count} months extracted from ${d.extraction.pages_scanned} pages`+
+      `&nbsp;·&nbsp; <strong style="color:var(--accent)">${d.extract_ms}ms</strong>`;
+
+    document.getElementById('pdf-returns').innerHTML =
+      d.raw_returns_preview.map((r, i) => {
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        return `<div class="ret-cell ${r >= 0 ? 'ret-pos' : 'ret-neg'}">
+          <div style="font-size:0.65rem;color:var(--muted);margin-bottom:2px">${months[i]||'M'+(i+1)}</div>
+          ${r >= 0 ? '+' : ''}${r.toFixed(2)}%
+        </div>`;
+      }).join('');
+
+    document.getElementById('pdf-metrics').innerHTML = `
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--accent)">${m.sharpe.toFixed(2)}</div><div class="pm-lbl">Sharpe Ratio</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:${m.max_dd < -0.10 ? 'var(--red)' : 'var(--yellow)'}">${(m.max_dd*100).toFixed(1)}%</div><div class="pm-lbl">Max Drawdown</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--accent)">${m.corr_spy.toFixed(3)}</div><div class="pm-lbl">SPY Correlation</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--accent)">${m.sortino.toFixed(2)}</div><div class="pm-lbl">Sortino Ratio</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--text)">${m.score.toFixed(1)}</div><div class="pm-lbl">Composite Score</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:${recColor[m.signal]||'var(--text)'}">${m.signal}</div><div class="pm-lbl">Signal</div></div>`;
+
+    document.getElementById('pdf-result').classList.add('visible');
+  }).catch(e => {
+    btn.textContent = '✗ Failed — see console';
+    btn.disabled = false;
+    console.error(e);
+  });
+}
 </script>
 </body>
 </html>
