@@ -139,18 +139,23 @@ def recommend(sharpe: float,
     genuine diversification value. The bar is intentionally high — only
     exceptional managers should reach RECOMMEND.
 
-      RECOMMEND  — score ≥ 70 AND Sharpe ≥ 1.0 AND MaxDD ≥ -15% AND |Corr| ≤ 0.50
-      WATCHLIST  — score ≥ 50 AND Sharpe ≥ 0.6 AND MaxDD ≥ -25%
+      RECOMMEND  — score ≥ 60 AND Sharpe ≥ 0.8 AND MaxDD ≥ -15% AND |Corr| ≤ 0.60
+      WATCHLIST  — score ≥ 45 AND Sharpe ≥ 0.4 AND MaxDD ≥ -25%
       PASS       — everything else (the majority — by design)
+
+    Thresholds calibrated for real alternative strategy ETF benchmarks:
+      - Sharpe 0.8+ is top-quartile for liquid alternatives in 2024–2025
+      - |Corr| ≤ 0.60 allows for moderate market sensitivity
+      - Score ≥ 60 is a meaningful discriminator across real fund distributions
     """
     passes_hard_floors = (
-        sharpe >= 1.0 and
+        sharpe >= 0.8 and
         drawdown >= -0.15 and
-        abs(correlation) <= 0.50
+        abs(correlation) <= 0.60
     )
-    if score >= 70 and passes_hard_floors:
+    if score >= 60 and passes_hard_floors:
         return "RECOMMEND"
-    elif score >= 50 and sharpe >= 0.6 and drawdown >= -0.25:
+    elif score >= 45 and sharpe >= 0.4 and drawdown >= -0.25:
         return "WATCHLIST"
     else:
         return "PASS"

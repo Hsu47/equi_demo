@@ -60,6 +60,30 @@
 
     .gem-tag { color: var(--gem); font-size: 0.8rem; margin-left: 4px; }
 
+    /* ── Score breakdown (expandable row) ── */
+    tr.fund-row { cursor: pointer; }
+    tr.fund-row:hover td { background: rgba(88,166,255,0.06); }
+    tr.fund-row td:first-child::before { content: '▶'; font-size: 0.6rem; color: var(--muted); margin-right: 6px; opacity: 0.5; transition: transform 0.2s; display: inline-block; }
+    tr.fund-row.open td:first-child::before { transform: rotate(90deg); opacity: 1; }
+    tr.breakdown-row td { padding: 0; }
+    tr.breakdown-row { display: none; }
+    tr.breakdown-row.visible { display: table-row; }
+    .breakdown-inner {
+      background: #0d1421; border-top: 1px solid #21262d; border-bottom: 1px solid #21262d;
+      padding: 16px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    .breakdown-inner .bd-left { }
+    .breakdown-inner .bd-right { font-size: 0.78rem; color: var(--muted); line-height: 1.8; }
+    .score-components { display: flex; flex-direction: column; gap: 8px; }
+    .sc-row { display: flex; align-items: center; gap: 10px; font-size: 0.78rem; }
+    .sc-label { width: 80px; color: var(--muted); flex-shrink: 0; }
+    .sc-bar-bg { flex: 1; background: #21262d; border-radius: 4px; height: 8px; position: relative; }
+    .sc-bar-fill { height: 8px; border-radius: 4px; position: absolute; left: 0; top: 0; transition: width 0.4s; }
+    .sc-pts { width: 52px; text-align: right; font-weight: 600; font-size: 0.75rem; }
+    .floor-tag { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; margin-right: 4px; }
+    .floor-pass { background: rgba(63,185,80,.15); color: var(--green); }
+    .floor-fail { background: rgba(248,81,73,.15); color: var(--red); }
+
     .bar-bg { display: inline-block; background: var(--border); border-radius: 4px; height: 6px; width: 60px; vertical-align: middle; margin-left: 6px; }
     .bar-fill { height: 6px; border-radius: 4px; background: var(--accent); }
 
@@ -98,6 +122,31 @@
     .moat-card .ours  { font-size: 0.8rem; color: var(--accent); line-height: 1.5; }
     .moat-card .icon  { font-size: 1.2rem; margin-bottom: 8px; display: block; }
 
+    /* ── Opportunity Map ── */
+    .omap-wrap { position: relative; }
+    .omap-legend { display: flex; gap: 20px; justify-content: flex-end; margin-bottom: 10px; font-size: 0.75rem; color: var(--muted); }
+    .omap-legend span { display: flex; align-items: center; gap: 6px; }
+    .omap-legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+    /* ── Pipeline log banner ── */
+    .pipeline-log {
+      max-width: 1100px; margin: -24px auto 28px;
+      background: #0d1117;
+      border: 1px solid #21262d;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+      display: flex; flex-wrap: wrap; gap: 0 24px; align-items: center;
+    }
+    .pipeline-log .step { display: flex; align-items: center; gap: 6px; }
+    .pipeline-log .tag  { color: var(--accent); font-weight: 600; }
+    .pipeline-log .ok   { color: var(--green); }
+    .pipeline-log .dim  { opacity: 0.5; }
+    .pipeline-log .sep  { color: #30363d; }
+    .pipeline-log .ts   { margin-left: auto; opacity: 0.45; font-size: 0.68rem; }
+
     /* ── Footer ── */
     footer { max-width: 1100px; margin: 32px auto 0; font-size: 0.75rem; color: var(--muted); display: flex; justify-content: space-between; }
     footer a { color: var(--accent); text-decoration: none; }
@@ -112,6 +161,10 @@
   </div>
   <span class="badge">Demo MVP · 2025</span>
 </header>
+
+<div class="pipeline-log" id="pipeline-log">
+  <span class="dim">loading pipeline trace…</span>
+</div>
 
 <div class="wrap">
 
@@ -130,7 +183,7 @@
     <div class="kpi">
       <div class="val" style="color:var(--gem)" id="k-gems">–</div>
       <div class="lbl">Undiscovered Gems</div>
-      <div class="sub">high score · AUM &lt; $300M · pre-institutional</div>
+      <div class="sub">score ≥ 85 · AUM &lt; $500M · pre-institutional</div>
     </div>
     <div class="kpi">
       <div class="val" style="color:var(--green)" id="k-rec">–</div>
@@ -191,6 +244,26 @@
     <div class="moat-grid" id="moat-grid"></div>
   </div>
 
+  <!-- Manager Opportunity Map -->
+  <div class="card">
+    <h2>Manager Opportunity Map — Equi's Entry Thesis</h2>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px;">
+      The optimal Equi target: <strong style="color:var(--text)">proven track record, not yet discovered by institutional capital.</strong>
+      Funds in the shaded zone (Score ≥ 65, AUM &lt; $500M) have validated alpha but remain below the deployment minimum of large allocators.
+      Equi enters here — before pricing power shifts to the manager.
+    </p>
+    <div class="omap-legend">
+      <span><span class="dot" style="background:#3fb950"></span>RECOMMEND</span>
+      <span><span class="dot" style="background:#d29922"></span>WATCHLIST</span>
+      <span><span class="dot" style="background:#f85149"></span>PASS</span>
+      <span><span class="dot" style="background:#e3b341;border:2px solid #e3b341"></span>Gem</span>
+    </div>
+    <div class="omap-wrap">
+      <canvas id="scatterChart" height="110"></canvas>
+    </div>
+    <div class="insight" style="margin-top:16px" id="omap-insight"></div>
+  </div>
+
   <!-- Correlation Matrix -->
   <div class="card">
     <h2>Cross-Fund Correlation Matrix</h2>
@@ -208,6 +281,14 @@
 </footer>
 
 <script>
+// ── Score breakdown toggle ────────────────────────────────────────────────────
+function toggleBreakdown(rowId, bdId) {
+  const row = document.getElementById(rowId);
+  const bd  = document.getElementById(bdId);
+  row.classList.toggle('open');
+  bd.classList.toggle('visible');
+}
+
 // ── Colour helpers ────────────────────────────────────────────────────────────
 const recColor = { RECOMMEND: '#3fb950', WATCHLIST: '#d29922', PASS: '#f85149' };
 
@@ -233,14 +314,44 @@ fetch('/api/funds').then(r => r.json()).then(funds => {
   document.getElementById('k-gems').textContent  = funds.filter(f => f.gem).length || '0';
 
   const tbody = document.getElementById('fund-tbody');
-  funds.forEach(f => {
+
+  // Score breakdown calculation (mirrors pipeline/score.py weights)
+  function calcBreakdown(f) {
+    const s_pts  = Math.min(f.sharpe / 3, 1.0) * 40;
+    const dd_pts = Math.max(0, (f.max_dd + 0.30) / 0.30) * 25;
+    const c_pts  = (1 - Math.min(Math.abs(f.corr), 1.0)) * 20;
+    const so_pts = Math.min((f.sortino || 0) / 5, 1.0) * 15;
+    return { s_pts, dd_pts, c_pts, so_pts };
+  }
+
+  function floorBadge(pass, label) {
+    return `<span class="floor-tag ${pass ? 'floor-pass' : 'floor-fail'}">${pass ? '✓' : '✗'} ${label}</span>`;
+  }
+
+  function whyNotRecommend(f) {
+    if (f.rec === 'RECOMMEND') return `<span style="color:var(--green)">✓ Passes all hard floors — RECOMMEND</span>`;
+    const failReasons = [];
+    if (f.sharpe < 0.8)         failReasons.push(floorBadge(false, `Sharpe ${f.sharpe.toFixed(2)} < 0.8`));
+    else                         failReasons.push(floorBadge(true,  `Sharpe ${f.sharpe.toFixed(2)}`));
+    if (f.max_dd < -0.15)        failReasons.push(floorBadge(false, `DD ${(f.max_dd*100).toFixed(1)}% < -15%`));
+    else                         failReasons.push(floorBadge(true,  `DD ${(f.max_dd*100).toFixed(1)}%`));
+    if (Math.abs(f.corr) > 0.60) failReasons.push(floorBadge(false, `|Corr| ${Math.abs(f.corr).toFixed(2)} > 0.60`));
+    else                         failReasons.push(floorBadge(true,  `|Corr| ${Math.abs(f.corr).toFixed(2)}`));
+    if (f.score < 60)            failReasons.push(floorBadge(false, `Score ${f.score.toFixed(1)} < 60`));
+    return failReasons.join(' ');
+  }
+
+  funds.forEach((f, idx) => {
     const gemLabel = f.gem_tier === 'strong' ? '💎 Strong Gem' : f.gem_tier === 'emerging' ? '💎 Emerging' : '';
-    const gem  = f.gem ? `<span class="gem-tag" title="Undiscovered Gem — AUM below institutional radar">&nbsp;${gemLabel}</span>` : '';
+    const gem  = f.gem ? `<span class="gem-tag">&nbsp;${gemLabel}</span>` : '';
     const aum  = f.aum_mm ? f.aum_mm : '–';
     const dd   = (f.max_dd * 100).toFixed(1) + '%';
     const ret  = (f.ann_return > 0 ? '+' : '') + f.ann_return.toFixed(1) + '%';
+    const rowId = `fund-row-${idx}`;
+    const bdId  = `bd-row-${idx}`;
+
     tbody.innerHTML += `
-      <tr>
+      <tr class="fund-row" id="${rowId}" onclick="toggleBreakdown('${rowId}','${bdId}')">
         <td>${f.rank}</td>
         <td><strong>${f.name}</strong>${gem}</td>
         <td>${aum}</td>
@@ -250,6 +361,38 @@ fetch('/api/funds').then(r => r.json()).then(funds => {
         <td>${f.corr.toFixed(3)}</td>
         <td>${f.score.toFixed(1)} ${scoreBar(f.score)}</td>
         <td><span class="rec-badge ${f.rec}">${f.rec}</span></td>
+      </tr>
+      <tr class="breakdown-row" id="${bdId}">
+        <td colspan="9">
+          ${(function() {
+            const bd = calcBreakdown(f);
+            const components = [
+              { label: 'Sharpe ×40%',   pts: bd.s_pts,  max: 40, color: '#58a6ff', raw: `${f.sharpe.toFixed(2)}` },
+              { label: 'Max DD ×25%',   pts: bd.dd_pts, max: 25, color: '#3fb950', raw: `${(f.max_dd*100).toFixed(1)}%` },
+              { label: 'Corr ×20%',     pts: bd.c_pts,  max: 20, color: '#e3b341', raw: `${f.corr.toFixed(3)}` },
+              { label: 'Sortino ×15%',  pts: bd.so_pts, max: 15, color: '#a371f7', raw: `${(f.sortino||0).toFixed(2)}` },
+            ];
+            const rows = components.map(c =>
+              `<div class="sc-row">
+                <span class="sc-label">${c.label}</span>
+                <div class="sc-bar-bg"><div class="sc-bar-fill" style="width:${(c.pts/c.max*100).toFixed(0)}%;background:${c.color}"></div></div>
+                <span class="sc-pts" style="color:${c.color}">${c.pts.toFixed(1)}<span style="color:var(--muted);font-weight:400">/${c.max}</span></span>
+                <span style="color:var(--muted);font-size:0.72rem;width:52px">${c.raw}</span>
+              </div>`
+            ).join('');
+            return `<div class="breakdown-inner">
+              <div class="bd-left">
+                <div style="font-size:0.75rem;color:var(--muted);margin-bottom:10px;font-weight:600">SCORE BREAKDOWN · ${f.score.toFixed(1)}/100</div>
+                <div class="score-components">${rows}</div>
+              </div>
+              <div class="bd-right">
+                <div style="font-size:0.75rem;color:var(--muted);font-weight:600;margin-bottom:8px">HARD FLOOR EVALUATION</div>
+                <div>${whyNotRecommend(f)}</div>
+                ${f.aum_mm ? `<div style="margin-top:8px;font-size:0.73rem">AUM $${f.aum_mm}M · ${f.aum_mm < 500 ? '<span style="color:var(--gem)">below $500M institutional threshold</span>' : 'above institutional minimum'}</div>` : ''}
+              </div>
+            </div>`;
+          })()}
+        </td>
       </tr>`;
   });
 });
@@ -378,6 +521,122 @@ fetch('/api/fee_arbitrage').then(r => r.json()).then(d => {
     generates <strong>+${d.pct_uplift}% more</strong> than paying standard 2/20 over 5 years —
     <strong>$${(d.fee_savings_5yr/1000).toFixed(0)}K in additional compounded return</strong>.
     This is why accessing managers <em>before</em> they have pricing power is Equi's first-layer alpha.`;
+});
+
+// ── Pipeline Execution Log ────────────────────────────────────────────────────
+fetch('/api/meta').then(r => r.json()).then(m => {
+  const t = m.timing;
+  const fmts = `json:${m.formats.json} csv:${m.formats.csv} dict:${m.formats.dict}`;
+  document.getElementById('pipeline-log').innerHTML = `
+    <span class="step"><span class="tag">[ingest]</span> ${m.total_funds} funds &nbsp;<span class="dim">${fmts}</span> &nbsp;
+      ${m.data_source === 'live'
+        ? '<span style="color:#e3b341;font-weight:600">● LIVE · Yahoo Finance</span>'
+        : '<span style="color:var(--muted)">● mock data</span>'}
+      &nbsp;<span class="ok">✓ ${t.ingest_ms}ms</span></span>
+    <span class="sep">·</span>
+    <span class="step"><span class="tag">[transform]</span> ${m.transform_pass}/${m.total_funds} passed &nbsp;<span class="ok">✓ ${t.transform_ms}ms</span></span>
+    <span class="sep">·</span>
+    <span class="step"><span class="tag">[score]</span> <span style="color:var(--green)">REC:${m.recommend}</span> <span style="color:var(--yellow)"> WATCH:${m.watchlist}</span> <span style="color:var(--red)"> PASS:${m.pass_count}</span> &nbsp;💎 gems:${m.gems} &nbsp;<span class="ok">✓ ${t.score_ms}ms</span></span>
+    <span class="sep">·</span>
+    <span class="step"><span class="ok">✓ pipeline complete</span> &nbsp;<span class="dim">${t.total_ms}ms total</span></span>
+    <span class="ts">ran ${m.ran_at}</span>
+  `;
+});
+
+// ── Manager Opportunity Map ───────────────────────────────────────────────────
+fetch('/api/funds').then(r => r.json()).then(funds => {
+  const colorMap = { RECOMMEND: '#3fb950', WATCHLIST: '#d29922', PASS: '#f85149' };
+  const radiusMap = { RECOMMEND: 9, WATCHLIST: 7, PASS: 6 };
+
+  const byRec = { RECOMMEND: [], WATCHLIST: [], PASS: [] };
+  funds.forEach(f => {
+    if (f.aum_mm) byRec[f.rec].push({
+      x: f.score,
+      y: f.aum_mm,
+      name: f.name,
+      gem: f.gem,
+    });
+  });
+
+  const datasets = ['RECOMMEND', 'WATCHLIST', 'PASS'].map(rec => ({
+    label: rec,
+    data: byRec[rec],
+    backgroundColor: byRec[rec].map(d => d.gem ? '#e3b341' : colorMap[rec] + 'cc'),
+    pointRadius: byRec[rec].map(d => d.gem ? 12 : radiusMap[rec]),
+    pointHoverRadius: 13,
+    pointStyle: byRec[rec].map(d => d.gem ? 'star' : 'circle'),
+  }));
+
+  // Sweet spot shading plugin
+  const sweetSpotPlugin = {
+    id: 'sweetSpot',
+    beforeDraw(chart) {
+      const { ctx, chartArea: { left, right, top, bottom }, scales } = chart;
+      const x65 = scales.x.getPixelForValue(65);
+      const y500 = scales.y.getPixelForValue(500);
+      ctx.save();
+      ctx.fillStyle = 'rgba(227,179,65,0.06)';
+      ctx.strokeStyle = 'rgba(227,179,65,0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.fillRect(x65, top, right - x65, y500 - top);
+      ctx.strokeRect(x65, top, right - x65, y500 - top);
+      ctx.restore();
+      // Label
+      ctx.save();
+      ctx.font = '11px -apple-system, sans-serif';
+      ctx.fillStyle = 'rgba(227,179,65,0.6)';
+      ctx.fillText('Equi Sweet Spot', x65 + 8, top + 16);
+      ctx.restore();
+    }
+  };
+
+  new Chart(document.getElementById('scatterChart'), {
+    type: 'scatter',
+    plugins: [sweetSpotPlugin],
+    data: { datasets },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#8b949e', font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const d = ctx.raw;
+              return `${d.name}  |  Score: ${d.x.toFixed(1)}  |  AUM: $${d.y}M${d.gem ? '  💎' : ''}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Composite Score', color: '#8b949e', font: { size: 11 } },
+          ticks: { color: '#8b949e' }, grid: { color: '#21262d' },
+          min: 0, max: 100,
+        },
+        y: {
+          title: { display: true, text: 'AUM ($M)', color: '#8b949e', font: { size: 11 } },
+          ticks: { color: '#8b949e', callback: v => '$' + v + 'M' },
+          grid: { color: '#21262d' },
+          min: 0,
+        },
+      }
+    }
+  });
+
+  // Gem funds in sweet spot
+  const gems = funds.filter(f => f.gem);
+  const sweetSpot = funds.filter(f => f.score >= 65 && (f.aum_mm || 999) < 500);
+  document.getElementById('omap-insight').innerHTML =
+    `<strong>Opportunity thesis:</strong> ${sweetSpot.length} fund${sweetSpot.length !== 1 ? 's' : ''} sit in the Equi Sweet Spot
+    (Score ≥ 65, AUM &lt; $500M). ${gems.length > 0
+      ? `<strong style="color:var(--gem)">${gems[0].name}</strong> is the standout —
+         composite score <strong>${gems[0].score.toFixed(1)}</strong> with only
+         $${gems[0].aum_mm}M AUM. At 15% gross returns, this manager has proven alpha
+         but hasn't hit institutional deployment minimums. That window is Equi's entry point.`
+      : 'No strong gems in current cohort.'}
+    As AUM grows past $500M, institutional allocators pile in — fees rise, capacity closes, alpha decays.
+    <strong>Equi's scoring pipeline exists precisely to find this window before it closes.</strong>`;
 });
 
 // ── Competitive Moat ──────────────────────────────────────────────────────────

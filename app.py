@@ -13,21 +13,51 @@ Open: http://localhost:5001
 
 import sys
 import os
+import time
+import datetime
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask, render_template, jsonify
 from pipeline.ingest import load_all_funds
+from pipeline.ingest_live import load_live_funds
 from pipeline.transform import transform_all
 from pipeline.score import score_all, portfolio_analytics
 
 app = Flask(__name__)
 
-# ── Run pipeline once on startup ─────────────────────────────────────────────
-raw      = load_all_funds()
+# ── Run pipeline once on startup (with timing) ────────────────────────────────
+_t0 = time.time()
+
+_t_ingest_start = time.time()
+try:
+    raw = load_live_funds()
+    _data_source = "live"
+    if len(raw) < 5:          # too few live results → fall back
+        raise ValueError("insufficient live data")
+except Exception as _e:
+    print(f"[app] Live data failed ({_e}), falling back to mock data")
+    raw = load_all_funds()
+    _data_source = "mock"
+_t_ingest_ms = round((time.time() - _t_ingest_start) * 1000, 1)
+
+_t_transform_start = time.time()
 tfmd     = transform_all(raw)
+_t_transform_ms = round((time.time() - _t_transform_start) * 1000, 1)
+
+_t_score_start = time.time()
 scored   = score_all(tfmd)
+_t_score_ms = round((time.time() - _t_score_start) * 1000, 1)
+
 recommended = [f for f in scored if f["recommendation"] == "RECOMMEND"]
 analytics   = portfolio_analytics(recommended)
+
+_pipeline_total_ms = round((time.time() - _t0) * 1000, 1)
+_pipeline_ran_at   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+_format_counts = {"json": 0, "csv": 0, "dict": 0, "live": 0}
+for f in raw:
+    key = f.get("source_format", "dict")
+    _format_counts[key] = _format_counts.get(key, 0) + 1
 
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
@@ -147,6 +177,32 @@ def api_fee_arbitrage():
         "pct_uplift":      pct_uplift,
         "initial":         initial,
         "gross_annual_pct": gross_annual * 100,
+    })
+
+
+@app.route("/api/meta")
+def api_meta():
+    """Pipeline execution metadata — proves the system actually ran."""
+    rec   = len([f for f in scored if f["recommendation"] == "RECOMMEND"])
+    watch = len([f for f in scored if f["recommendation"] == "WATCHLIST"])
+    fail  = len([f for f in scored if f["recommendation"] == "PASS"])
+    gems  = len([f for f in scored if f.get("gem")])
+    return jsonify({
+        "ran_at":          _pipeline_ran_at,
+        "total_funds":     len(raw),
+        "data_source":     _data_source,
+        "formats":         _format_counts,
+        "transform_pass":  len(tfmd),
+        "recommend":       rec,
+        "watchlist":       watch,
+        "pass_count":      fail,
+        "gems":            gems,
+        "timing": {
+            "ingest_ms":    _t_ingest_ms,
+            "transform_ms": _t_transform_ms,
+            "score_ms":     _t_score_ms,
+            "total_ms":     _pipeline_total_ms,
+        }
     })
 
 
