@@ -166,6 +166,50 @@ def ingest_dict(raw: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Synthetic private fund records — represent Equi's off-market universe
+# These are the "undiscovered" managers Equi sources via direct GP relationships
+# ---------------------------------------------------------------------------
+
+PRIVATE_FUNDS = [
+    {
+        "fund_id": "PRIV_TCF",
+        "name": "Thornbury Credit Fund",
+        # Merger-arb style: mostly positive, occasional small negatives, AUM $185M
+        # Targets Sharpe ~1.8, max DD < 2%, low market correlation
+        "returns": [0.024, 0.007, 0.031, -0.004, 0.019, 0.028,
+                    0.009, 0.033, -0.002, 0.025, 0.018, 0.022],
+        "aum_mm": 185,
+    },
+    {
+        "fund_id": "PRIV_PBM",
+        "name": "Pacific Basin Global Macro",
+        # Macro trend-following: higher vol, uncorrelated to SPY, AUM $290M
+        # Targets Sharpe ~1.5, max DD ~3%, near-zero SPY correlation
+        "returns": [0.028, -0.009, 0.034, 0.012, -0.006, 0.041,
+                    0.019, -0.013, 0.032, 0.025, -0.004, 0.038],
+        "aum_mm": 290,
+    },
+    {
+        "fund_id": "PRIV_QQA",
+        "name": "Quantum Quant Arbitrage",
+        # Systematic quant: consistent alpha, near-zero beta, AUM $520M
+        # Targets Sharpe ~2.0, max DD < 2%, low market correlation
+        "returns": [0.018, -0.003, 0.021, 0.011, 0.027, -0.007,
+                    0.024, 0.013, 0.019, 0.032, -0.005, 0.022],
+        "aum_mm": 520,
+    },
+]
+
+
+def load_private_funds() -> List[dict]:
+    """
+    Returns synthetic private fund records that simulate Equi's
+    off-market GP universe — the managers that don't appear on Bloomberg.
+    """
+    return [ingest_dict(f) for f in PRIVATE_FUNDS]
+
+
+# ---------------------------------------------------------------------------
 # Main entry point: returns a list of normalized raw records
 # ---------------------------------------------------------------------------
 

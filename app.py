@@ -18,7 +18,7 @@ import datetime
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask, render_template, jsonify, send_from_directory
-from pipeline.ingest import load_all_funds
+from pipeline.ingest import load_all_funds, load_private_funds
 from pipeline.ingest_live import load_live_funds
 from pipeline.transform import transform_all
 from pipeline.score import score_all, portfolio_analytics
@@ -30,14 +30,16 @@ _t0 = time.time()
 
 _t_ingest_start = time.time()
 try:
-    raw = load_live_funds()
+    live = load_live_funds()
     _data_source = "live"
-    if len(raw) < 5:          # too few live results → fall back
+    if len(live) < 5:          # too few live results → fall back
         raise ValueError("insufficient live data")
 except Exception as _e:
     print(f"[app] Live data failed ({_e}), falling back to mock data")
-    raw = load_all_funds()
+    live = load_all_funds()
     _data_source = "mock"
+# Always blend in synthetic private funds (Equi's off-market GP universe)
+raw = live + load_private_funds()
 _t_ingest_ms = round((time.time() - _t_ingest_start) * 1000, 1)
 
 _t_transform_start = time.time()
@@ -312,18 +314,19 @@ def api_pdf_demo():
         t_extract = round((_time.time() - t0) * 1000, 1)
 
         transformed = transform_fund(fund_raw)
-        returns     = transformed["excess_returns"]
-        spy         = transformed.get("market_returns") or SPY_MONTHLY_LIVE[:len(returns)]
+        excess  = transformed["excess_returns"]      # rf already subtracted — for Sharpe
+        monthly = transformed["monthly_returns"]     # raw monthly — for Sortino, Corr
+        spy     = transformed.get("market_returns") or SPY_MONTHLY_LIVE[:len(monthly)]
 
         from pipeline.score import recommend as score_recommend
-        sharpe  = sharpe_ratio(returns)
+        sharpe  = sharpe_ratio(excess)
         dd      = max_drawdown(transformed["nav_curve"])
-        sortino = sortino_ratio(returns)
-        corr    = pearson_correlation(returns, spy[:len(returns)])
+        sortino = sortino_ratio(monthly)             # sortino_ratio subtracts rf internally
+        corr    = pearson_correlation(monthly, spy[:len(monthly)])
         # composite_score(sharpe, drawdown, sortino, correlation, aum_mm)
-        score   = composite_score(sharpe, dd, sortino, corr,
-                                  aum_mm=fund_raw.get("aum_mm"))
-        signal  = score_recommend(sharpe, dd, corr, score)
+        score  = composite_score(sharpe, dd, sortino, corr,
+                                 aum_mm=fund_raw.get("aum_mm"))
+        signal = score_recommend(sharpe, dd, corr, score)
 
         return jsonify({
             "status":        "success",
