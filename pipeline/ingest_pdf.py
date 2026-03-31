@@ -67,16 +67,56 @@ _SUMMARY_PERIOD_LABELS = {
 
 
 def _extract_text_and_tables(path: str):
-    """Return (full_text, list_of_tables) from all pages."""
+    """Return (full_text, list_of_tables, page_char_counts) from all pages."""
     full_text = []
     all_tables = []
+    page_char_counts = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
-            full_text.append(page.extract_text() or "")
+            page_text = page.extract_text() or ""
+            full_text.append(page_text)
+            page_char_counts.append(len(page_text.strip()))
             tables = page.extract_tables()
             if tables:
                 all_tables.extend(tables)
-    return "\n".join(full_text), all_tables
+    return "\n".join(full_text), all_tables, page_char_counts
+
+
+def _detect_ocr_needed(page_char_counts: list) -> dict:
+    """
+    Detect if a PDF likely needs OCR (scanned/image-based content).
+
+    Checks text density per page. A text-based PDF page typically has 200+ chars.
+    A scanned page with no text layer has 0-50 chars (maybe stray header/footer).
+
+    Returns:
+        {
+            "ocr_needed":        bool,   # True if most pages lack text
+            "low_text_pages":    int,    # count of pages with < 100 chars
+            "total_pages":       int,
+            "avg_chars_per_page": float,
+            "page_char_counts":  list[int],
+        }
+    """
+    if not page_char_counts:
+        return {"ocr_needed": True, "low_text_pages": 0, "total_pages": 0,
+                "avg_chars_per_page": 0.0, "page_char_counts": []}
+
+    low_text_threshold = 100  # chars — below this, page is likely an image
+    low_text_pages = sum(1 for c in page_char_counts if c < low_text_threshold)
+    total = len(page_char_counts)
+    avg_chars = sum(page_char_counts) / total
+
+    # OCR needed if: majority of pages have low text, OR average is very low
+    ocr_needed = (low_text_pages / total > 0.5) or (avg_chars < 80)
+
+    return {
+        "ocr_needed":         ocr_needed,
+        "low_text_pages":     low_text_pages,
+        "total_pages":        total,
+        "avg_chars_per_page": round(avg_chars, 1),
+        "page_char_counts":   page_char_counts,
+    }
 
 
 def _find_fund_name(text: str) -> str:
@@ -918,11 +958,11 @@ def load_fund_from_pdf(path: str) -> dict:
     if not os.path.exists(path):
         raise FileNotFoundError(f"PDF not found: {path}")
 
-    text, tables = _extract_text_and_tables(path)
+    text, tables, page_char_counts = _extract_text_and_tables(path)
+    pages_scanned = len(page_char_counts)
 
-    # Count pages
-    with pdfplumber.open(path) as pdf:
-        pages_scanned = len(pdf.pages)
+    # OCR detection — flag scanned/image PDFs before parsing
+    ocr_info = _detect_ocr_needed(page_char_counts)
 
     fund_name       = _find_fund_name(text)
     aum_mm          = _find_aum(text)
@@ -1000,6 +1040,20 @@ def load_fund_from_pdf(path: str) -> dict:
                 f"vs stated {aum_mm}M (delta {reconciliation['delta_pct']}%)"
             )
 
+    # ── OCR quality warning ─────────────────────────────────────────────────
+    if ocr_info["ocr_needed"]:
+        warnings.append(
+            f"PDF appears to be scanned/image-based — {ocr_info['low_text_pages']}/{ocr_info['total_pages']} "
+            f"pages have minimal text (avg {ocr_info['avg_chars_per_page']} chars/page). "
+            f"Extracted data may be incomplete or unreliable. Consider OCR preprocessing."
+        )
+    elif ocr_info["low_text_pages"] > 0 and method != "table":
+        # Partial OCR: some pages are images but not all — risky for text fallback
+        warnings.append(
+            f"PDF has {ocr_info['low_text_pages']}/{ocr_info['total_pages']} pages with minimal text. "
+            f"Some content may be image-based. Verify extracted returns against source."
+        )
+
     # ── Confidence score ─────────────────────────────────────────────────────
     method_scores = {"table": 1.0, "calendar_text": 0.85, "text": 0.5, "summary": 0.3, "failed": 0.0}
     method_score = method_scores.get(method, 0.0)
@@ -1015,10 +1069,16 @@ def load_fund_from_pdf(path: str) -> dict:
         return_type_adj = -0.15
     elif return_type == "gross":
         return_type_adj = -0.10  # known gross is less bad than unknown
+    # OCR penalty: scanned PDFs are fundamentally less trustworthy
+    ocr_adj = 0.0
+    if ocr_info["ocr_needed"]:
+        ocr_adj = -0.30  # severe: most pages are images
+    elif ocr_info["low_text_pages"] > 0 and method != "table":
+        ocr_adj = -0.10  # partial: some pages are images + non-table method
     confidence = round(
         min(1.0, max(0.0, method_score * 0.4 + completeness_score * 0.5
             + (1.0 - warning_penalty) * 0.1 + reconciliation_adj
-            + return_type_adj)),
+            + return_type_adj + ocr_adj)),
         3
     )
 
@@ -1048,6 +1108,9 @@ def load_fund_from_pdf(path: str) -> dict:
             "fee_source":       fees["fee_source"],
             "calendar_year":         diagnostics.get("calendar_text_year_used"),
             "trailing_12_period":    diagnostics.get("calendar_text_trailing_12_period"),
+            "ocr_needed":       ocr_info["ocr_needed"],
+            "low_text_pages":   ocr_info["low_text_pages"],
+            "avg_chars_per_page": ocr_info["avg_chars_per_page"],
             "warnings":              warnings,
             "summary_perf":     summary_perf,
             "reconciliation":   reconciliation,
