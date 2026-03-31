@@ -298,3 +298,74 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住每個 GP 的 PDF 格式指紋，
   下次遇到同 GP 的報告直接套用已知的解析策略，提高穩定性
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API 做結構化提取
+
+---
+
+## Iteration 5 — 2026-03-31
+
+### ARCHITECT
+第一性原理問題：什麼情況下 parser 會靜默給出錯誤數據，而且看起來很合理？
+
+答案：**部分文字層的掃描 PDF**。最危險的不是「完全掃描」（那至少會 raise ValueError），
+而是「封面/摘要有文字，表格是圖片」的混合 PDF。這種情況下：
+- pdfplumber 能抽到部分文字 → 不會完全失敗
+- text fallback 從摘要頁抓到隨機數字（可能是費用、NAV、benchmark 數字）
+- confidence 可能在 0.4-0.6 之間 — 看起來「低但不是零」
+- LP 分析師可能認為「數據品質一般但可用」→ 實際上是垃圾數字
+
+解法：在解析前就偵測文字密度，標記 OCR 需求，主動降低信心。
+
+### DEV
+新增兩個元件：
+- `_extract_text_and_tables()` 現在回傳 `page_char_counts`（每頁字元數）
+- `_detect_ocr_needed(page_char_counts)` — 分析文字密度：
+  - `low_text_threshold = 100 chars` — 低於此的頁面視為「可能是圖片」
+  - `ocr_needed = True` 當 >50% 頁面低文字 OR 平均 <80 chars/page
+  - 回傳 `ocr_needed`, `low_text_pages`, `avg_chars_per_page`
+- Confidence 調整：fully scanned → -0.30，partial + non-table method → -0.10
+- 新 extraction 欄位：`ocr_needed`, `low_text_pages`, `avg_chars_per_page`
+- 移除了 `pdfplumber.open()` 的重複呼叫（原本開兩次 PDF，現在只開一次）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+sample_lp_report.pdf 回歸測試：
+
+| Check | Result |
+|-------|--------|
+| 12 monthly returns match ground truth | 12/12 exact match |
+| AUM = 2.66 | Correct |
+| Confidence = 1.0 | Correct |
+| ocr_needed = false | Correct (avg 882.5 chars/page) |
+| low_text_pages = 0 | Correct |
+| mgmt_fee_pct = 1.0, incentive_fee_pct = 10.0 | Correct |
+| return_type = "net" | Correct |
+| No regressions | Confirmed |
+
+Edge case 驗證（模擬資料）：
+
+| 情境 | ocr_needed | 行為 |
+|------|-----------|------|
+| 完全掃描（5頁, avg 16 chars） | true | -0.30 confidence, warning 產生 |
+| 混合 PDF（2/4 頁低文字） | false | 如果非 table method → -0.10 + warning |
+| 健康文字 PDF（avg 983 chars） | false | 無調整 |
+| 空 PDF（0 頁） | true | 正確標記 |
+
+LP 視角評估：
+- 分析師上傳掃描件 → 立即看到 `ocr_needed: true` + 明確 warning
+- 不再有「部分抓取看起來可用但實際是垃圾」的風險
+- confidence 下降幅度合理：-0.30 讓 scanned PDF 的 confidence 不可能超過 0.7
+- `avg_chars_per_page` 提供可稽核的數字，不只是 boolean flag
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**LLM fallback（v2.6）的時機到了**：
+- 我們現在有完整的 confidence 機制（method + completeness + NAV reconciliation + fee/return type + OCR）
+- 當 confidence < 0.6（或 ocr_needed=true），與其給出不可靠的數據，
+  不如直接把 PDF 送 Claude API 做結構化提取
+- Claude 可以「看」圖片，處理掃描件，理解非標準格式
+- 這是 demo 的殺手級功能：「連掃描件都能處理」
+
+或者更穩健的方向：
+- **v2.5: Format Registry** — 記住已知格式，避免每次重新偵測
+  對 production 系統更有價值（同 GP 的報告格式通常不變）
+- **多 PDF 批次測試** — 找 3-5 份真實 GP 報告，驗證所有路徑的韌性
