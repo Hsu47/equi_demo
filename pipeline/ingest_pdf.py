@@ -769,8 +769,15 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
     if header_line_idx is None:
         return returns, warnings
 
+    # Detect trailing summary column (YTD / Annual / Total) in header
+    header_lower = lines[header_line_idx].lower()
+    has_trailing_summary = bool(
+        re.search(r'\b(?:ytd|annual|total|year)\b', header_lower)
+    )
+
     diagnostics["calendar_text_header_idx"] = header_line_idx
     diagnostics["calendar_text_months_found"] = len(month_col_order)
+    diagnostics["calendar_text_has_ytd_col"] = has_trailing_summary
 
     # Step 2: collect year rows below the header
     year_data = {}  # {year: [float, ...]}
@@ -796,9 +803,12 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
                     parsed.append(f)
             except ValueError:
                 pass
-        # The last value is often YTD — strip it only when we have 13 values
-        if len(parsed) == 13:
-            parsed = parsed[:12]
+        # Strip trailing summary (YTD/Annual) — it's NOT a monthly return.
+        # For full years: 13 values (12 months + YTD) → strip last.
+        # For partial years: e.g. 5 values (4 months + YTD) → strip last.
+        # Without YTD column: keep all values as-is.
+        if has_trailing_summary and len(parsed) > 1:
+            parsed = parsed[:-1]
         year_data[year] = parsed
 
     if not year_data:
