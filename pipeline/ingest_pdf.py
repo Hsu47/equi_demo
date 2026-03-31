@@ -241,6 +241,133 @@ def _find_beginning_nav(text: str):
     return None
 
 
+def _extract_fees(text: str) -> dict:
+    """
+    Extract fee structure from LP report text.
+
+    Scans for management fee and incentive/performance fee percentages.
+    Common formats:
+      - "Management Fees (1% annual)"
+      - "Management Fee: 1.5%"
+      - "Incentive Allocation (10%)"
+      - "Performance Fee: 20%"
+      - "2 and 20" / "1.5/20" shorthand
+
+    Returns:
+        {
+            "mgmt_fee_pct":      float | None,  # e.g. 1.0 for 1%
+            "incentive_fee_pct": float | None,  # e.g. 10.0 for 10%
+            "fee_source":        str,            # which pattern matched
+        }
+    """
+    result = {"mgmt_fee_pct": None, "incentive_fee_pct": None, "fee_source": None}
+    lines = text.splitlines()
+
+    # Pattern groups for management fee
+    _mgmt_patterns = [
+        # "Management Fee (1% annual)" or "Management Fees (1.5%)"
+        re.compile(r"management\s+fees?\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        # "Management Fee: 1.5%" or "Mgmt Fee: 2%"
+        re.compile(r"(?:management|mgmt)\s+fee\s*:?\s*(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        # "1.5% management fee"
+        re.compile(r"(\d{1,2}(?:\.\d{1,2})?)\s*%\s*(?:management|mgmt)\s+fee", re.IGNORECASE),
+    ]
+
+    # Pattern groups for incentive / performance fee
+    _incentive_patterns = [
+        # "Incentive Allocation (10%)" or "Incentive Fee (20%)"
+        re.compile(r"incentive\s+(?:allocation|fee)\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        # "Performance Fee: 20%"
+        re.compile(r"performance\s+fee\s*:?\s*(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        # "20% incentive" or "20% performance fee"
+        re.compile(r"(\d{1,2}(?:\.\d{1,2})?)\s*%\s*(?:incentive|performance\s+fee)", re.IGNORECASE),
+    ]
+
+    full_text = text.lower()
+
+    # Search for management fee
+    for pat in _mgmt_patterns:
+        m = pat.search(text)
+        if m:
+            try:
+                val = float(m.group(1))
+                if 0 < val <= 10:  # sanity: mgmt fee 0.1% to 10%
+                    result["mgmt_fee_pct"] = val
+                    result["fee_source"] = "explicit"
+                    break
+            except ValueError:
+                pass
+
+    # Search for incentive fee
+    for pat in _incentive_patterns:
+        m = pat.search(text)
+        if m:
+            try:
+                val = float(m.group(1))
+                if 0 < val <= 50:  # sanity: incentive fee up to 50%
+                    result["incentive_fee_pct"] = val
+                    if result["fee_source"] is None:
+                        result["fee_source"] = "explicit"
+                    break
+            except ValueError:
+                pass
+
+    # Fallback: "X and Y" or "X/Y" fee shorthand (e.g. "2 and 20", "1.5/20")
+    if result["mgmt_fee_pct"] is None and result["incentive_fee_pct"] is None:
+        m = re.search(
+            r"(\d{1,2}(?:\.\d{1,2})?)\s*(?:and|/|&)\s*(\d{1,2}(?:\.\d{1,2})?)",
+            full_text
+        )
+        if m:
+            try:
+                a, b = float(m.group(1)), float(m.group(2))
+                # Convention: smaller number is mgmt, larger is incentive
+                if a < b and a <= 5 and b <= 50:
+                    result["mgmt_fee_pct"] = a
+                    result["incentive_fee_pct"] = b
+                    result["fee_source"] = "shorthand"
+            except ValueError:
+                pass
+
+    return result
+
+
+def _classify_return_type(text: str, col_return_type: str = None) -> str:
+    """
+    Determine if extracted returns are net or gross.
+
+    Uses multiple signals:
+      1. Column header classification from _find_return_column (strongest)
+      2. Text-level indicators ("net of fees", "after fees", "gross of fees")
+
+    Returns: "net" | "gross" | "unknown"
+    """
+    # Signal 1: column header was explicit
+    if col_return_type in ("net", "gross"):
+        return col_return_type
+
+    # Signal 2: scan text for net/gross indicators near return context
+    text_l = text.lower()
+    net_indicators = [
+        "net of fees", "net of all fees", "after fees", "after all fees",
+        "net returns", "net performance", "stated after management fees",
+        "net of management", "after management fee",
+    ]
+    gross_indicators = [
+        "gross of fees", "before fees", "gross returns", "gross performance",
+        "before management fee", "before all fees",
+    ]
+
+    net_score = sum(1 for ind in net_indicators if ind in text_l)
+    gross_score = sum(1 for ind in gross_indicators if ind in text_l)
+
+    if net_score > 0 and net_score > gross_score:
+        return "net"
+    if gross_score > 0 and gross_score > net_score:
+        return "gross"
+    return "unknown"
+
+
 def _reconcile_nav(beginning_nav_mm: float, ending_nav_mm: float,
                    monthly_returns: list) -> dict:
     """
@@ -336,7 +463,10 @@ def _parse_return_from_row(cells, diagnostics=None, return_col_idx=None):
 _NET_RETURN_HEADERS = {"net return", "net ret", "net ror", "net perf", "net performance",
                        "return (net)", "net of fees", "monthly net", "net return (%)",
                        "return (%)", "monthly return"}
-_GROSS_RETURN_HEADERS = {"gross return", "gross ret", "gross ror", "gross perf"}
+_GROSS_RETURN_HEADERS = {"gross return", "gross ret", "gross ror", "gross perf",
+                         "gross performance", "gross ror (%)"}
+_AMBIGUOUS_RETURN_HEADERS = {"return", "performance", "monthly", "ror", "return(%)",
+                              "period return", "monthly returns", "monthly ror"}
 _SKIP_COL_HEADERS = {"cumulative", "cum nav", "cum. nav", "notes", "benchmark",
                      "s&p", "spy", "index", "comment", "attribution"}
 
@@ -344,9 +474,10 @@ _SKIP_COL_HEADERS = {"cumulative", "cum nav", "cum. nav", "notes", "benchmark",
 def _find_return_column(header_cells):
     """
     Given a header row's cells, find the best column index for net returns.
-    Priority: net return > generic return > gross return.
+    Priority: net return > gross return (with warning) > ambiguous (flagged).
     Skips columns classified as cumulative/benchmark/notes.
-    Returns (col_index, col_label) or (None, None).
+    Returns (col_index, col_label, return_type) or (None, None, None).
+    return_type: "net" | "gross" | "unknown"
     """
     net_col = None
     gross_col = None
@@ -363,10 +494,10 @@ def _find_return_column(header_cells):
             gross_col = (idx, cell_l)
 
     if net_col:
-        return net_col
+        return net_col[0], net_col[1], "net"
     if gross_col:
-        return gross_col
-    return None, None
+        return gross_col[0], gross_col[1], "gross"
+    return None, None, None
 
 
 # Keywords that indicate a row is a risk/stats label, NOT a performance header
@@ -451,6 +582,7 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
 
     return_col_idx = None
     return_col_label = None
+    col_return_type = None  # "net" | "gross" | None (from column header)
 
     for table_idx, table in enumerate(tables):
         # Check for horizontal/calendar format first
@@ -491,10 +623,11 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
             if _is_header_row(row_text):
                 has_month_col = True
                 # Use column-header-aware parsing to find the right column
-                col_idx, col_label = _find_return_column(cells)
+                col_idx, col_label, ret_type = _find_return_column(cells)
                 if col_idx is not None:
                     table_return_col = col_idx
                     return_col_label = col_label
+                    col_return_type = ret_type
                 continue
 
             first_cell = cells[0] if cells else ""
@@ -522,6 +655,7 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
             all_returns.extend(table_returns)  # continuation rows (split across pages)
 
     diagnostics["return_column"] = return_col_label or "auto (first numeric)"
+    diagnostics["col_return_type"] = col_return_type
     return all_returns, warnings
 
 
@@ -794,6 +928,7 @@ def load_fund_from_pdf(path: str) -> dict:
     aum_mm          = _find_aum(text)
     beginning_nav_mm = _find_beginning_nav(text)
     ticker          = _derive_ticker(fund_name, path)
+    fees            = _extract_fees(text)
 
     diagnostics = {}
 
@@ -840,6 +975,21 @@ def load_fund_from_pdf(path: str) -> dict:
             f"Warnings: {warnings}"
         )
 
+    # ── Return type classification ───────────────────────────────────────────
+    col_return_type = diagnostics.get("col_return_type")
+    return_type = _classify_return_type(text, col_return_type)
+
+    if return_type == "gross":
+        warnings.append(
+            "Returns appear to be GROSS of fees — LP comparisons require net returns. "
+            "Verify with GP or adjust using fee schedule."
+        )
+    elif return_type == "unknown":
+        warnings.append(
+            "Cannot determine if returns are net or gross of fees. "
+            "Column header is ambiguous — manual verification recommended."
+        )
+
     # ── NAV reconciliation ────────────────────────────────────────────────────
     reconciliation = None
     if beginning_nav_mm and aum_mm and returns:
@@ -859,9 +1009,16 @@ def load_fund_from_pdf(path: str) -> dict:
     reconciliation_adj = 0.0
     if reconciliation is not None:
         reconciliation_adj = 0.05 if reconciliation["reconciled"] else -0.2
+    # Return type penalty: unknown return type is a trust risk
+    return_type_adj = 0.0
+    if return_type == "unknown":
+        return_type_adj = -0.15
+    elif return_type == "gross":
+        return_type_adj = -0.10  # known gross is less bad than unknown
     confidence = round(
         min(1.0, max(0.0, method_score * 0.4 + completeness_score * 0.5
-            + (1.0 - warning_penalty) * 0.1 + reconciliation_adj)),
+            + (1.0 - warning_penalty) * 0.1 + reconciliation_adj
+            + return_type_adj)),
         3
     )
 
@@ -871,6 +1028,8 @@ def load_fund_from_pdf(path: str) -> dict:
         "name":              fund_name,
         "aum_mm":            aum_mm,
         "beginning_nav_mm":  beginning_nav_mm,
+        "mgmt_fee_pct":      fees["mgmt_fee_pct"],
+        "incentive_fee_pct": fees["incentive_fee_pct"],
         "raw_returns":       returns,
         "source_format":     "pdf",
         "source_path":       path,
@@ -885,6 +1044,8 @@ def load_fund_from_pdf(path: str) -> dict:
             "returns_count":    len(returns),
             "confidence":       confidence,
             "return_column":    diagnostics.get("return_column", "unknown"),
+            "return_type":      return_type,
+            "fee_source":       fees["fee_source"],
             "calendar_year":         diagnostics.get("calendar_text_year_used"),
             "trailing_12_period":    diagnostics.get("calendar_text_trailing_12_period"),
             "warnings":              warnings,
