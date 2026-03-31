@@ -34,9 +34,12 @@ _DATE_PATTERN = re.compile(
     r"|(\d{1,2})/(\d{4})"     # 01/2025
 )
 
-_FUND_NAME_LABELS = ("fund name", "fund:", "managed by", "fund lp", "capital fund", "macro fund")
-_AUM_LABELS       = ("ending nav", "ending capital", "total nav", "fund aum")
-_PERIOD_LABELS    = ("reporting period", "period:", "for the period")
+_FUND_NAME_LABELS    = ("fund name", "fund:", "managed by", "fund lp", "capital fund", "macro fund")
+_AUM_LABELS          = ("ending nav", "ending capital", "total nav", "fund aum")
+_BEGINNING_NAV_LABELS = ("beginning nav", "beginning capital", "beginning balance",
+                          "opening nav", "opening capital", "opening balance",
+                          "beg. nav", "beg nav", "start nav")
+_PERIOD_LABELS       = ("reporting period", "period:", "for the period")
 
 # Expanded header detection — covers most LP report variants
 _RETURN_HEADER_KEYWORDS = {
@@ -193,6 +196,79 @@ def _find_aum(text: str):
                     except ValueError:
                         pass
     return None
+
+
+def _find_beginning_nav(text: str):
+    """Extract beginning NAV using same multi-format logic as _find_aum."""
+    lines = text.splitlines()
+
+    def _try_parse_amount(search_text):
+        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
+        if m:
+            try:
+                return round(float(m.group(1).replace(",", "")), 2)
+            except ValueError:
+                pass
+        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", ""))
+                if val > 100_000:
+                    return round(val / 1_000_000, 2)
+            except ValueError:
+                pass
+        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", ""))
+                if val > 100_000:
+                    return round(val / 1_000_000, 2)
+            except ValueError:
+                pass
+        return None
+
+    for i, line in enumerate(lines):
+        line_l = line.lower()
+        if any(lbl in line_l for lbl in _BEGINNING_NAV_LABELS):
+            result = _try_parse_amount(line)
+            if result is not None:
+                return result
+            if i + 1 < len(lines):
+                result = _try_parse_amount(lines[i + 1])
+                if result is not None:
+                    return result
+    return None
+
+
+def _reconcile_nav(beginning_nav_mm: float, ending_nav_mm: float,
+                   monthly_returns: list) -> dict:
+    """
+    Cross-validate extracted monthly returns against stated NAV movement.
+
+    Compounds monthly returns and checks if the result matches the
+    beginning→ending NAV ratio stated in the capital account summary.
+
+    Returns:
+        {
+            "beginning_nav_mm": float,
+            "ending_nav_mm":    float,
+            "implied_nav_mm":   float,   # beginning * compound(returns)
+            "delta_pct":        float,   # abs % difference
+            "reconciled":       bool,    # True if delta < 5%
+        }
+    """
+    compound = 1.0
+    for r in monthly_returns:
+        compound *= (1.0 + r)
+    implied_nav_mm = round(beginning_nav_mm * compound, 4)
+    delta_pct = abs(implied_nav_mm - ending_nav_mm) / ending_nav_mm * 100
+    return {
+        "beginning_nav_mm": beginning_nav_mm,
+        "ending_nav_mm":    ending_nav_mm,
+        "implied_nav_mm":   round(implied_nav_mm, 4),
+        "delta_pct":        round(delta_pct, 2),
+        "reconciled":       delta_pct < 5.0,
+    }
 
 
 def _is_month_cell(cell_text: str) -> bool:
@@ -564,12 +640,13 @@ def load_fund_from_pdf(path: str) -> dict:
 
     Returns:
         {
-            "ticker":        str,
-            "name":          str,
-            "aum_mm":        float | None,
-            "raw_returns":   list[float],   # 12 monthly returns
-            "source_format": "pdf",
-            "source_path":   str,
+            "ticker":           str,
+            "name":             str,
+            "aum_mm":           float | None,   # ending NAV in millions
+            "beginning_nav_mm": float | None,   # beginning NAV in millions
+            "raw_returns":      list[float],    # monthly returns as decimals
+            "source_format":    "pdf",
+            "source_path":      str,
             "extraction": {
                 "pages_scanned":    int,
                 "tables_found":     int,
@@ -583,6 +660,7 @@ def load_fund_from_pdf(path: str) -> dict:
                 "return_column":    str,     # which column header was used
                 "warnings":         list[str],
                 "summary_perf":     dict | None,
+                "reconciliation":   dict | None,  # NAV cross-check result
             }
         }
 
@@ -598,9 +676,10 @@ def load_fund_from_pdf(path: str) -> dict:
     with pdfplumber.open(path) as pdf:
         pages_scanned = len(pdf.pages)
 
-    fund_name = _find_fund_name(text)
-    aum_mm    = _find_aum(text)
-    ticker    = _derive_ticker(fund_name, path)
+    fund_name       = _find_fund_name(text)
+    aum_mm          = _find_aum(text)
+    beginning_nav_mm = _find_beginning_nav(text)
+    ticker          = _derive_ticker(fund_name, path)
 
     diagnostics = {}
 
@@ -638,24 +717,40 @@ def load_fund_from_pdf(path: str) -> dict:
             f"Warnings: {warnings}"
         )
 
+    # ── NAV reconciliation ────────────────────────────────────────────────────
+    reconciliation = None
+    if beginning_nav_mm and aum_mm and returns:
+        reconciliation = _reconcile_nav(beginning_nav_mm, aum_mm, returns)
+        if not reconciliation["reconciled"]:
+            warnings.append(
+                f"NAV reconciliation failed: implied {reconciliation['implied_nav_mm']}M "
+                f"vs stated {aum_mm}M (delta {reconciliation['delta_pct']}%)"
+            )
+
     # ── Confidence score ─────────────────────────────────────────────────────
     method_scores = {"table": 1.0, "text": 0.5, "summary": 0.3, "failed": 0.0}
     method_score = method_scores.get(method, 0.0)
     completeness_score = min(len(returns) / 12.0, 1.0)
     warning_penalty = min(len(warnings) * 0.1, 1.0)
+    # Reconciliation bonus: verified numbers get +0.05, failed check gets -0.2
+    reconciliation_adj = 0.0
+    if reconciliation is not None:
+        reconciliation_adj = 0.05 if reconciliation["reconciled"] else -0.2
     confidence = round(
-        method_score * 0.4 + completeness_score * 0.5 + (1.0 - warning_penalty) * 0.1,
+        min(1.0, max(0.0, method_score * 0.4 + completeness_score * 0.5
+            + (1.0 - warning_penalty) * 0.1 + reconciliation_adj)),
         3
     )
 
     return {
-        "fund_id":       ticker,
-        "ticker":        ticker,
-        "name":          fund_name,
-        "aum_mm":        aum_mm,
-        "raw_returns":   returns,
-        "source_format": "pdf",
-        "source_path":   path,
+        "fund_id":           ticker,
+        "ticker":            ticker,
+        "name":              fund_name,
+        "aum_mm":            aum_mm,
+        "beginning_nav_mm":  beginning_nav_mm,
+        "raw_returns":       returns,
+        "source_format":     "pdf",
+        "source_path":       path,
         "extraction": {
             "pages_scanned":    pages_scanned,
             "tables_found":     len(tables),
@@ -669,6 +764,7 @@ def load_fund_from_pdf(path: str) -> dict:
             "return_column":    diagnostics.get("return_column", "unknown"),
             "warnings":         warnings,
             "summary_perf":     summary_perf,
+            "reconciliation":   reconciliation,
         },
     }
 
