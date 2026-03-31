@@ -630,21 +630,40 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
     if not year_data:
         return returns, warnings
 
-    # Step 3: pick most recent year with >= 6 months
-    for year in sorted(year_data.keys(), reverse=True):
-        vals = year_data[year]
-        if len(vals) >= 6:
-            # Trim to 12 if longer
-            monthly = vals[:12]
-            returns = [v / 100.0 for v in monthly]
-            diagnostics["calendar_text_year_used"] = year
-            diagnostics["calendar_text_months_extracted"] = len(returns)
-            if len(returns) < 12:
-                warnings.append(
-                    f"calendar text: {year} only has {len(returns)}/12 months "
-                    f"(partial year or prior year used)"
-                )
-            break
+    # Step 3: Flatten all months chronologically → take trailing 12
+    # This is strictly more correct than picking a calendar year:
+    # LP committees evaluate trailing 12 months, not Jan–Dec of a specific year.
+    # For a PDF with 2024 full year + 3 months of 2025, calendar-year logic would
+    # return 2024 data (silently stale), while trailing 12 returns Apr 2024–Mar 2025.
+    _month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    all_monthly = []  # [(year, month_idx, raw_pct_value)]
+    for year in sorted(year_data.keys()):
+        for i, val in enumerate(year_data[year]):
+            all_monthly.append((year, i, val))
+
+    if not all_monthly:
+        return returns, warnings
+
+    trailing = all_monthly[-12:]
+    returns = [v / 100.0 for (_, _, v) in trailing]
+
+    # Build a human-readable period label
+    sy, sm, _ = trailing[0]
+    ey, em, _ = trailing[-1]
+    period_label = f"{_month_names[sm]} {sy} – {_month_names[em]} {ey}"
+
+    diagnostics["calendar_text_year_used"] = ey
+    diagnostics["calendar_text_trailing_12_period"] = period_label
+    diagnostics["calendar_text_months_extracted"] = len(returns)
+    diagnostics["calendar_text_total_months_available"] = len(all_monthly)
+
+    if len(returns) < 12:
+        warnings.append(
+            f"calendar text: only {len(returns)} months available across all years "
+            f"(need 12 for full trailing 12 period)"
+        )
 
     return returns, warnings
 
@@ -866,8 +885,9 @@ def load_fund_from_pdf(path: str) -> dict:
             "returns_count":    len(returns),
             "confidence":       confidence,
             "return_column":    diagnostics.get("return_column", "unknown"),
-            "calendar_year":    diagnostics.get("calendar_text_year_used"),
-            "warnings":         warnings,
+            "calendar_year":         diagnostics.get("calendar_text_year_used"),
+            "trailing_12_period":    diagnostics.get("calendar_text_trailing_12_period"),
+            "warnings":              warnings,
             "summary_perf":     summary_perf,
             "reconciliation":   reconciliation,
         },
