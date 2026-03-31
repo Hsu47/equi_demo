@@ -35,7 +35,8 @@ _DATE_PATTERN = re.compile(
 )
 
 _FUND_NAME_LABELS    = ("fund name", "fund:", "managed by", "fund lp", "capital fund", "macro fund")
-_AUM_LABELS          = ("ending nav", "ending capital", "total nav", "fund aum")
+_AUM_LABELS          = ("ending nav", "ending capital", "total nav", "fund aum",
+                        "fund assets", "total assets", "net assets", "fund size")
 _BEGINNING_NAV_LABELS = ("beginning nav", "beginning capital", "beginning balance",
                           "opening nav", "opening capital", "opening balance",
                           "beg. nav", "beg nav", "start nav")
@@ -554,6 +555,100 @@ def _extract_monthly_returns_from_text(text: str, diagnostics: dict):
     return returns, warnings
 
 
+_MONTH_ABBREVS = ["jan", "feb", "mar", "apr", "may", "jun",
+                  "jul", "aug", "sep", "oct", "nov", "dec"]
+
+
+def _extract_calendar_text_format(text: str, diagnostics: dict):
+    """
+    Extract monthly returns from 'year-as-row' calendar format found in text.
+
+    Handles PDFs where pdfplumber fails to parse the table but the raw text
+    contains rows like:
+        Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec  YTD
+        2024  1.85%  3.74%  2.77% ...
+        2025  0.03% -4.02%  0.21% ...
+
+    Strategy:
+      1. Find a 'month header line' — contains >= 8 of the 12 month abbreviations
+      2. Scan subsequent lines for year rows (starting with 20XX)
+      3. Parse % values in column order, strip YTD if present
+      4. Return the most recent complete year's returns (12 months preferred)
+
+    Returns (list[float], list[str]) — returns and warnings.
+    """
+    returns = []
+    warnings = []
+    lines = text.splitlines()
+
+    # Step 1: find month header line
+    header_line_idx = None
+    month_col_order = []
+    for i, line in enumerate(lines):
+        line_l = line.lower()
+        found_months = [m for m in _MONTH_ABBREVS if re.search(r'\b' + m + r'\b', line_l)]
+        if len(found_months) >= 8:
+            header_line_idx = i
+            month_col_order = found_months
+            break
+
+    if header_line_idx is None:
+        return returns, warnings
+
+    diagnostics["calendar_text_header_idx"] = header_line_idx
+    diagnostics["calendar_text_months_found"] = len(month_col_order)
+
+    # Step 2: collect year rows below the header
+    year_data = {}  # {year: [float, ...]}
+    _pct_pattern = re.compile(r'([+-]?\d{1,3}\.\d{1,2})\s*%?')
+
+    for line in lines[header_line_idx + 1:]:
+        line_s = line.strip()
+        m = re.match(r'^(20\d{2})\b', line_s)
+        if not m:
+            # Stop if we hit a non-year line after collecting some data
+            if year_data:
+                break
+            continue
+
+        year = int(m.group(1))
+        # Extract all %-like values from the rest of the line
+        values_raw = _pct_pattern.findall(line_s[4:])  # skip the year token
+        parsed = []
+        for v in values_raw:
+            try:
+                f = float(v)
+                if -50 <= f <= 50:   # wider range for annual returns / YTD
+                    parsed.append(f)
+            except ValueError:
+                pass
+        # The last value is often YTD — strip it only when we have 13 values
+        if len(parsed) == 13:
+            parsed = parsed[:12]
+        year_data[year] = parsed
+
+    if not year_data:
+        return returns, warnings
+
+    # Step 3: pick most recent year with >= 6 months
+    for year in sorted(year_data.keys(), reverse=True):
+        vals = year_data[year]
+        if len(vals) >= 6:
+            # Trim to 12 if longer
+            monthly = vals[:12]
+            returns = [v / 100.0 for v in monthly]
+            diagnostics["calendar_text_year_used"] = year
+            diagnostics["calendar_text_months_extracted"] = len(returns)
+            if len(returns) < 12:
+                warnings.append(
+                    f"calendar text: {year} only has {len(returns)}/12 months "
+                    f"(partial year or prior year used)"
+                )
+            break
+
+    return returns, warnings
+
+
 def _parse_period_header(header_text: str) -> list:
     """Parse a period header line into a list of period keys."""
     period_map = []
@@ -683,9 +778,18 @@ def load_fund_from_pdf(path: str) -> dict:
 
     diagnostics = {}
 
-    # Try table extraction first, fall back to text scan
+    # Try table extraction first
     returns, warnings = _extract_monthly_returns_from_tables(tables, diagnostics)
     method = "table"
+
+    # Fallback 1: year-row calendar format from raw text (e.g. Winton-style)
+    if len(returns) < 3:
+        returns, cal_warnings = _extract_calendar_text_format(text, diagnostics)
+        warnings.extend(cal_warnings)
+        if len(returns) >= 3:
+            method = "calendar_text"
+
+    # Fallback 2: generic text scan
     if len(returns) < 3:
         returns, text_warnings = _extract_monthly_returns_from_text(text, diagnostics)
         warnings.extend(text_warnings)
@@ -728,7 +832,7 @@ def load_fund_from_pdf(path: str) -> dict:
             )
 
     # ── Confidence score ─────────────────────────────────────────────────────
-    method_scores = {"table": 1.0, "text": 0.5, "summary": 0.3, "failed": 0.0}
+    method_scores = {"table": 1.0, "calendar_text": 0.85, "text": 0.5, "summary": 0.3, "failed": 0.0}
     method_score = method_scores.get(method, 0.0)
     completeness_score = min(len(returns) / 12.0, 1.0)
     warning_penalty = min(len(warnings) * 0.1, 1.0)
@@ -762,6 +866,7 @@ def load_fund_from_pdf(path: str) -> dict:
             "returns_count":    len(returns),
             "confidence":       confidence,
             "return_column":    diagnostics.get("return_column", "unknown"),
+            "calendar_year":    diagnostics.get("calendar_text_year_used"),
             "warnings":         warnings,
             "summary_perf":     summary_perf,
             "reconciliation":   reconciliation,
