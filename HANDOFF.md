@@ -369,3 +369,69 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式，避免每次重新偵測
   對 production 系統更有價值（同 GP 的報告格式通常不變）
 - **多 PDF 批次測試** — 找 3-5 份真實 GP 報告，驗證所有路徑的韌性
+
+---
+
+## Iteration 6 — 2026-03-31
+
+### ARCHITECT
+第一性原理問題：我們有 4 種格式的測試 PDF（Iteration 5 加的 test generator），但從來沒跑過 parser 驗證。這是最基本的 validation gap——**你寫了測試但沒跑測試**。
+
+跑了之後發現：Format D（calendar grid with partial year + YTD column）靜默地給出錯誤數據。
+
+具體錯誤：
+- 2025 年只有 Jan-Apr 4 個月數據，但 YTD 欄位有 3.06%
+- Parser 的 `_pct_pattern` 跳過 dash（`-`）但抓到 YTD（3.06），當成第 5 個月
+- 舊邏輯只在 `len(parsed) == 13` 時才砍 YTD → partial year (5 values) 不砍
+- 結果：trailing-12 window 偏移 1 個月，YTD 值被當成月報酬
+- **零 warning，confidence = 0.94**——LP 委員會完全不會察覺
+
+這是教科書級的靜默數據汙染：一個累計數字偽裝成月度數字，數值大小完全合理（3.06% 作為月報酬很正常）。
+
+### DEV
+修改 `_extract_calendar_text_format()`：
+- 新增 header 行的 YTD/Annual/Total 偵測：`has_trailing_summary`
+- 改寫 YTD 剝離邏輯：從「只在 13 個值時砍最後一個」→「有 YTD 欄就永遠砍最後一個」
+- 新增 diagnostics 欄位：`calendar_text_has_ytd_col`
+- 同時跑完所有 5 份 PDF（1 sample + 4 format variants），全部 PASS
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Confidence | Method | Notes |
+|-----|---------|-----|------------|--------|-------|
+| sample_lp_report.pdf | 12/12 exact ✓ | 2.66 ✓ | 1.0 | table | No regression |
+| format_a (AQR factsheet) | 12/12 exact ✓ | 850.0 ✓ | 0.94 | calendar_text | YTD correctly stripped |
+| format_b (ambiguous headers) | 12/12 exact ✓ | 420.0 ✓ | 0.79 | table | return_type=net via text context |
+| format_c (gross + net cols) | 12/12 exact ✓ | 1200.0 ✓ | 1.0 | table | Correctly picks net column |
+| format_d (calendar grid) | 12/12 exact ✓ | 3200.0 ✓ | 0.94 | calendar_text | **Fixed**: trailing May 2024–Apr 2025 |
+
+前後比較（Format D）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| Trailing period | Jun 2024 – May 2025 (wrong) | May 2024 – Apr 2025 (correct) |
+| Last value | 3.06% (YTD, not a month!) | 1.42% (Apr 2025, correct) |
+| First value | 0.56% (Jun 2024) | -1.10% (May 2024) |
+| Warning | None (silent!) | None (correct data, no warning needed) |
+
+LP 視角：
+- 這個修復防止了一個會直接影響基金比較的靜默錯誤
+- 3.06% YTD 被當成月報酬 → 年化 ~36%，會嚴重高估基金表現
+- 現在有 5 種格式的自動化 ground truth 驗證，parser 的可信度大幅提高
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**Format B 的 NAV reconciliation 看起來有問題**：
+- Beginning NAV = $420M, Ending NAV = $420M（相同，PDF 設計錯誤？）
+- 但 12 個月回報加總 ≠ 0% → implied NAV = $450.4M vs stated $420M (delta 7.24%)
+- 這觸發了 reconciliation warning，confidence 降到 0.79
+- 問題是：這是「測試 PDF 的 ground truth 設計錯誤」還是「parser 的問題」？
+- 需要修正 test PDF generator 的 ground truth（ending NAV 應該 = beginning * compound returns）
+
+其他方向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **v2.5: Format Registry** — 記住 GP 格式指紋（production 價值高）
+- **自動化測試套件** — 把 5 種格式的驗證包成 pytest，CI 可跑
