@@ -106,10 +106,11 @@ def api_regime():
     Returns per-fund calm/stress correlation data, VIX regime summary,
     and a list of funds flagged for regime risk.
     """
-    from pipeline.transform import VIX_REGIME_LABELS
+    from pipeline.transform import get_vix_regime_labels
+    vix_labels = get_vix_regime_labels()
 
-    calm_count   = VIX_REGIME_LABELS.count("calm")
-    stress_count = VIX_REGIME_LABELS.count("stress")
+    calm_count   = vix_labels.count("calm")
+    stress_count = vix_labels.count("stress")
 
     fund_data = []
     flagged   = []
@@ -133,10 +134,10 @@ def api_regime():
 
     return jsonify({
         "vix_regime_summary": {
-            "total_months":  len(VIX_REGIME_LABELS),
+            "total_months":  len(vix_labels),
             "calm_months":   calm_count,
             "stress_months": stress_count,
-            "labels":        VIX_REGIME_LABELS,
+            "labels":        vix_labels,
         },
         "funds":             fund_data,
         "flagged_funds":     flagged,
@@ -304,7 +305,7 @@ def api_pdf_demo():
     from pipeline.transform import transform_fund
     from pipeline.score import (composite_score, sharpe_ratio, max_drawdown,
                                  sortino_ratio, pearson_correlation)
-    from pipeline.transform import SPY_MONTHLY_LIVE
+    from pipeline.transform import get_spy_monthly
 
     pdf_path = os.path.join(os.path.dirname(__file__), "static", "sample_lp_report.pdf")
 
@@ -316,7 +317,7 @@ def api_pdf_demo():
         transformed = transform_fund(fund_raw)
         excess  = transformed["excess_returns"]      # rf already subtracted — for Sharpe
         monthly = transformed["monthly_returns"]     # raw monthly — for Sortino, Corr
-        spy     = transformed.get("market_returns") or SPY_MONTHLY_LIVE[:len(monthly)]
+        spy     = transformed.get("market_returns") or get_spy_monthly()[:len(monthly)]
 
         from pipeline.score import recommend as score_recommend
         sharpe  = sharpe_ratio(excess)

@@ -15,6 +15,7 @@ Key transformations:
 from typing import Optional, List
 import statistics
 import math
+import time
 import requests
 
 # ---------------------------------------------------------------------------
@@ -41,29 +42,41 @@ def _fetch_vix_regime_labels() -> List[str]:
     url = ("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX"
            "?interval=1mo&range=13mo")
     headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        r = requests.get(url, headers=headers, timeout=8)
-        r.raise_for_status()
-        closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-        closes = [c for c in closes if c is not None]
-        closes = closes[-12:]           # keep most recent 12 months
-        labels = ["stress" if v > 20 else "calm" for v in closes]
-        stress_count = labels.count("stress")
-        print(f"[transform] VIX regime: fetched {len(labels)} months live "
-              f"({stress_count} stress, {len(labels)-stress_count} calm) ✓")
-        return labels
-    except Exception as e:
-        # Fallback: approximate 2024-2025 VIX monthly closes
-        fallback_vix = [18, 16, 22, 19, 31, 18, 17, 25, 20, 18, 19, 16]
-        labels = ["stress" if v > 20 else "calm" for v in fallback_vix]
-        stress_count = labels.count("stress")
-        print(f"[transform] VIX live fetch failed ({e}), using fallback "
-              f"({stress_count} stress, {len(labels)-stress_count} calm)")
-        return labels
+    last_error = None
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            r.raise_for_status()
+            closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+            closes = [c for c in closes if c is not None]
+            closes = closes[-12:]           # keep most recent 12 months
+            labels = ["stress" if v > 20 else "calm" for v in closes]
+            stress_count = labels.count("stress")
+            print(f"[transform] VIX regime: fetched {len(labels)} months live "
+                  f"({stress_count} stress, {len(labels)-stress_count} calm) ✓")
+            return labels
+        except Exception as e:
+            last_error = e
+            if attempt < 2:
+                time.sleep(2 ** (attempt + 1))
+    # Fallback: approximate 2024-2025 VIX monthly closes
+    fallback_vix = [18, 16, 22, 19, 31, 18, 17, 25, 20, 18, 19, 16]
+    labels = ["stress" if v > 20 else "calm" for v in fallback_vix]
+    stress_count = labels.count("stress")
+    print(f"[transform] VIX live fetch failed ({last_error}), using fallback "
+          f"({stress_count} stress, {len(labels)-stress_count} calm)")
+    return labels
 
 
-# Fetch once at import time — globally shared across all funds
-VIX_REGIME_LABELS: List[str] = _fetch_vix_regime_labels()
+# Lazy initialization — avoid network calls at import time (kills cloud deploys)
+_vix_cache: Optional[List[str]] = None
+
+def get_vix_regime_labels() -> List[str]:
+    """Lazy-fetch VIX regime labels. Cached after first call."""
+    global _vix_cache
+    if _vix_cache is None:
+        _vix_cache = _fetch_vix_regime_labels()
+    return _vix_cache
 
 
 # ---------------------------------------------------------------------------
@@ -81,26 +94,38 @@ def _fetch_spy_monthly() -> List[float]:
     url = ("https://query1.finance.yahoo.com/v8/finance/chart/SPY"
            "?interval=1mo&range=13mo")
     headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        r = requests.get(url, headers=headers, timeout=8)
-        r.raise_for_status()
-        closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-        closes = [c for c in closes if c is not None]
-        returns = [(closes[i] - closes[i-1]) / closes[i-1]
-                   for i in range(1, len(closes))]
-        returns = returns[-12:]
-        print(f"[transform] SPY benchmark: fetched {len(returns)} months live ✓")
-        return returns
-    except Exception as e:
-        # Fallback to 2024 approximate values if network fails
-        print(f"[transform] SPY live fetch failed ({e}), using 2024 fallback")
-        return [
-            0.016, 0.052, 0.031, -0.041, 0.048, 0.035,
-            0.011, 0.023, 0.019, -0.017, 0.056, 0.042,
-        ]
+    last_error = None
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            r.raise_for_status()
+            closes = r.json()["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+            closes = [c for c in closes if c is not None]
+            returns = [(closes[i] - closes[i-1]) / closes[i-1]
+                       for i in range(1, len(closes))]
+            returns = returns[-12:]
+            print(f"[transform] SPY benchmark: fetched {len(returns)} months live ✓")
+            return returns
+        except Exception as e:
+            last_error = e
+            if attempt < 2:
+                time.sleep(2 ** (attempt + 1))
+    # Fallback to 2024 approximate values if all retries fail
+    print(f"[transform] SPY live fetch failed ({last_error}), using 2024 fallback")
+    return [
+        0.016, 0.052, 0.031, -0.041, 0.048, 0.035,
+        0.011, 0.023, 0.019, -0.017, 0.056, 0.042,
+    ]
 
-# Fetch once at import time so all funds use the same benchmark window
-SPY_MONTHLY_LIVE = _fetch_spy_monthly()
+# Lazy initialization — avoid network calls at import time
+_spy_cache: Optional[List[float]] = None
+
+def get_spy_monthly() -> List[float]:
+    """Lazy-fetch SPY benchmark. Cached after first call."""
+    global _spy_cache
+    if _spy_cache is None:
+        _spy_cache = _fetch_spy_monthly()
+    return _spy_cache
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +204,9 @@ def transform_fund(raw: dict) -> dict:
         "monthly_returns": validated,
         "excess_returns": excess,
         "nav_curve": nav,
-        "market_returns": SPY_MONTHLY_LIVE,
+        "market_returns": get_spy_monthly(),
         "annualized_return": ann_return,
-        "regime_labels": VIX_REGIME_LABELS,   # 12-element list: 'calm' or 'stress'
+        "regime_labels": get_vix_regime_labels(),   # 12-element list: 'calm' or 'stress'
     }
 
 

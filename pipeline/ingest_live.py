@@ -22,6 +22,7 @@ Why ETF proxies and not actual hedge fund data?
   for a licensed data provider and zero downstream code changes.
 """
 
+import time
 import requests
 from typing import List, Optional
 
@@ -42,33 +43,37 @@ LIVE_FUNDS = [
 _YF_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
-def _fetch_monthly_returns(ticker: str) -> Optional[List[float]]:
-    """Fetch last 12 months of monthly returns from Yahoo Finance."""
+def _fetch_monthly_returns(ticker: str, max_retries: int = 3) -> Optional[List[float]]:
+    """Fetch last 12 months of monthly returns from Yahoo Finance.
+    Retries with exponential backoff on transient failures."""
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
         f"?interval=1mo&range=13mo"
     )
-    try:
-        r = requests.get(url, headers=_YF_HEADERS, timeout=8)
-        r.raise_for_status()
-        result = r.json()["chart"]["result"]
-        if not result:
-            return None
-        closes = result[0]["indicators"]["quote"][0]["close"]
-        # Remove None values (missing months)
-        closes = [c for c in closes if c is not None]
-        if len(closes) < 2:
-            return None
-        # Monthly return = (close[i] - close[i-1]) / close[i-1]
-        returns = [
-            (closes[i] - closes[i - 1]) / closes[i - 1]
-            for i in range(1, len(closes))
-        ]
-        # Use last 12 months
-        return returns[-12:]
-    except Exception as e:
-        print(f"[ingest_live] ERROR fetching {ticker}: {e}")
-        return None
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(url, headers=_YF_HEADERS, timeout=10)
+            r.raise_for_status()
+            result = r.json()["chart"]["result"]
+            if not result:
+                return None
+            closes = result[0]["indicators"]["quote"][0]["close"]
+            closes = [c for c in closes if c is not None]
+            if len(closes) < 2:
+                return None
+            returns = [
+                (closes[i] - closes[i - 1]) / closes[i - 1]
+                for i in range(1, len(closes))
+            ]
+            return returns[-12:]
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)  # 2s, 4s
+                print(f"[ingest_live] {ticker} attempt {attempt+1} failed, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"[ingest_live] ERROR fetching {ticker} after {max_retries} attempts: {e}")
+                return None
 
 
 def load_live_funds() -> List[dict]:
