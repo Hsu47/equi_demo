@@ -224,3 +224,77 @@ LP 視角評估（CalPERS alts team）：
 - 抓費用表（常見格式：「Management Fee: 2%」）
 - 在 extraction dict 標記 `return_type: "net" | "gross" | "unknown"`
 - 如果 return_type = "unknown" → confidence 降低 0.15
+
+---
+
+## Iteration 4 — 2026-03-31
+
+### ARCHITECT
+第一性原理問題：如果我們抓到的數字是 gross return 而非 net return，LP 委員會會怎樣？
+
+答案：他們會高估基金表現 2-3%/年（以 2/20 基金為例），可能做出錯誤的配置決策。
+而且這個錯誤是**完全靜默的**——數字看起來非常合理，沒有任何 warning。
+
+最危險的情境：PDF 表格標題只寫 "Return" 或 "Monthly Performance"（不是 "Net Return"），
+我們的 parser 照抓不誤，confidence=1.0，no warnings。LP 以為是 net，實際是 gross。
+
+解法不只是「標記 net/gross」，而是三個維度：
+1. **費用結構提取** — 知道費率才能估算 gross-to-net 的差距
+2. **Return type 分類** — 從欄位標題 + 全文語境判斷 net/gross/unknown
+3. **信心懲罰** — unknown return type 直接降 confidence，逼使用者手動確認
+
+### DEV
+新增三個函數：
+- `_extract_fees(text)` — 解析管理費和激勵費，支援多種格式：
+  - "Management Fees (1% annual)" → mgmt_fee_pct=1.0
+  - "Incentive Allocation (10%)" → incentive_fee_pct=10.0
+  - "2 and 20" / "1.5/20" 速記格式
+- `_classify_return_type(text, col_return_type)` — 多信號分類：
+  - 信號 1：欄位標題（_find_return_column 第三個回傳值）
+  - 信號 2：全文關鍵字（"net of fees", "after fees" vs "gross of fees"）
+- `_find_return_column()` 擴充為回傳 3-tuple (idx, label, return_type)
+
+Confidence 調整：
+- return_type="unknown" → -0.15
+- return_type="gross" → -0.10（已知 gross 比未知好，至少有明確標記）
+
+Output 新增欄位：
+- `mgmt_fee_pct`, `incentive_fee_pct`（主 dict）
+- `return_type`, `fee_source`（extraction dict）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+sample_lp_report.pdf 回歸測試：
+
+| Check | Result |
+|-------|--------|
+| 12 monthly returns match ground truth | 12/12 exact match |
+| AUM = 2.66 | Correct |
+| Confidence = 1.0 | Correct |
+| mgmt_fee_pct = 1.0 | Correct (PDF: "Management Fees (1% annual)") |
+| incentive_fee_pct = 10.0 | Correct (PDF: "Incentive Allocation (10%)") |
+| return_type = "net" | Correct (column: "net return (%)") |
+| fee_source = "explicit" | Correct |
+| No regressions | Confirmed |
+
+LP 視角評估：
+- **費用可見性**：分析師可以直接看到 1/10 的費用結構，不需要翻 PPM
+- **Return type 標記**：明確知道「這是 net return」— 不再靠猜
+- **Ambiguous 情境的 warning**：如果下一份 PDF 欄位只寫 "Return"，
+  confidence 會降到 ~0.85 並附帶 warning，分析師知道要手動確認
+- **Cross-validation potential**：有了費率 + return type，未來可以做
+  gross→net 反算驗證（如果同時有 gross 和 net 欄位）
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**OCR 偵測（scanned PDF 靜默失敗）**：
+- 目前如果 PDF 是掃描件（圖片，沒有文字層），pdfplumber 會回傳空字串
+- Parser 走到 "failed" 方法，raise ValueError — 這至少不靜默
+- 但如果是「部分文字層」（表格是圖片，摘要有文字）→ summary method 會抓到部分數據
+  confidence 看起來合理，但月報酬是空的或不完整
+- 建議 v2.4：偵測 PDF 是否有足夠文字層，沒有的話標記 `ocr_needed: true`
+
+或者更有 demo 價值的：
+- **v2.5: Format Registry** — 記住每個 GP 的 PDF 格式指紋，
+  下次遇到同 GP 的報告直接套用已知的解析策略，提高穩定性
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API 做結構化提取
