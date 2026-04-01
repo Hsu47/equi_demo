@@ -56,6 +56,12 @@ GROUND_TRUTH = {
         "aum_mm": 3200.0,
         "trailing_period": True,  # should show trailing period, not calendar year
     },
+    "format_e_parenthetical_negatives.pdf": {
+        "monthly_returns": GT_MONTHLY,  # same returns, but negatives use (X.XX) format
+        "aum_mm": 579.09,  # ending NAV (beginning $540M * compound returns)
+        "beginning_nav_mm": 540.0,
+        "return_type": "net",
+    },
 }
 
 
@@ -327,6 +333,74 @@ def build_format_d():
     print(f"  ✓ Format D (calendar grid, partial year): {path}")
 
 
+# ── Format E: Parenthetical negatives (US GAAP / fund admin style) ────────
+
+def build_format_e():
+    """
+    LP capital account statement using parenthetical negatives: (0.91)% instead of -0.91%.
+    This is standard US GAAP format used by fund admins (Citco, SS&C, NAV Consulting).
+    Parser must correctly interpret (X.XX) as negative, not positive.
+    """
+    path = os.path.join(OUTPUT_DIR, "format_e_parenthetical_negatives.pdf")
+    doc = SimpleDocTemplate(path, pagesize=letter,
+                            rightMargin=0.75*inch, leftMargin=0.75*inch,
+                            topMargin=0.75*inch, bottomMargin=0.6*inch)
+    st = _styles()
+    story = []
+
+    story.append(Paragraph("Blackstone Credit Strategies Fund LP", st["title"]))
+    story.append(Paragraph("Capital Account Statement — FY 2025", st["sub"]))
+    story.append(Paragraph("Prepared by SS&C Fund Administration", st["sub"]))
+    story.append(Spacer(1, 0.15*inch))
+
+    # Capital account
+    beginning_nav = 540_000_000
+    compound = 1.0
+    for r in GT_MONTHLY:
+        compound *= (1 + r / 100)
+    ending_nav = round(beginning_nav * compound)
+    story.append(Paragraph("Capital Account Summary", st["section"]))
+    cap = [
+        ["Beginning NAV (Jan 1, 2025)", f"${beginning_nav:,.0f}"],
+        ["Ending NAV (Dec 31, 2025)", f"${ending_nav:,.0f}"],
+        ["Net Assets Under Management", "$580M"],
+    ]
+    t = Table(cap, colWidths=[4*inch, 2.5*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Monthly returns with PARENTHETICAL NEGATIVES — this is the key format
+    story.append(Paragraph("Monthly Net Return (%)", st["section"]))
+    header = ["Month", "Net Return (%)", "Cumulative NAV"]
+    rows = [header]
+    cum = 100.0
+    for i, r in enumerate(GT_MONTHLY):
+        cum *= (1 + r / 100)
+        month_name = f"{GT_MONTHS[i]} 2025"
+        # Format negative returns with parentheses: (0.91)% instead of -0.91%
+        if r < 0:
+            ret_str = f"({abs(r):.2f})%"
+        else:
+            ret_str = f"{r:.2f}%"
+        rows.append([month_name, ret_str, f"{cum:.2f}"])
+    t = Table(rows, colWidths=[2*inch, 1.5*inch, 1.5*inch])
+    t.setStyle(_table_style_basic())
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph(
+        "Returns are net of all management fees and incentive allocations. "
+        "Negative returns are shown in parentheses per US GAAP convention. "
+        "Management Fee: 1.5% annual. Incentive Fee: 15%.",
+        st["disc"]))
+    doc.build(story)
+    print(f"  ✓ Format E (parenthetical negatives): {path}")
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating test PDFs...")
@@ -334,6 +408,7 @@ def main():
     build_format_b()
     build_format_c()
     build_format_d()
+    build_format_e()
     print(f"\nGround truth for validation:")
     for name, gt in GROUND_TRUTH.items():
         print(f"  {name}: {len(gt['monthly_returns'])} months, AUM={gt.get('aum_mm')}")

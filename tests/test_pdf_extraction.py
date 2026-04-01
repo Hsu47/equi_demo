@@ -214,6 +214,52 @@ class TestFormatD:
         assert self.ext["confidence"] >= 0.85
 
 
+class TestFormatE:
+    """Format E: Parenthetical negatives — (0.91)% instead of -0.91%."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, ensure_test_pdfs):
+        self.gt = GROUND_TRUTH["format_e_parenthetical_negatives.pdf"]
+        self.result = _load_test_pdf("format_e_parenthetical_negatives.pdf")
+        self.ext = self.result["extraction"]
+
+    def test_returns_exact_match(self):
+        """Parenthetical negatives must be correctly parsed as negative values."""
+        expected = [r / 100 for r in self.gt["monthly_returns"]]
+        actual = self.result["raw_returns"]
+        assert len(actual) == 12
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            assert abs(a - e) < 1e-6, f"Month {i+1}: {a} != {e}"
+
+    def test_negative_returns_are_negative(self):
+        """Critical: months with (X.XX)% format must be negative, not positive."""
+        # GT_MONTHLY has negatives at indices 1, 4, 7, 10 (Feb, May, Aug, Nov)
+        negative_indices = [i for i, r in enumerate(self.gt["monthly_returns"]) if r < 0]
+        assert len(negative_indices) >= 3, "Ground truth should have multiple negative months"
+        for i in negative_indices:
+            assert self.result["raw_returns"][i] < 0, (
+                f"Month {i+1} should be negative but got {self.result['raw_returns'][i]}"
+            )
+
+    def test_aum(self):
+        assert abs(self.result["aum_mm"] - self.gt["aum_mm"]) < 1.0
+
+    def test_return_type(self):
+        assert self.ext["return_type"] == "net"
+
+    def test_confidence(self):
+        assert self.ext["confidence"] >= 0.95
+
+    def test_nav_reconciliation(self):
+        rec = self.ext["reconciliation"]
+        assert rec is not None
+        assert rec["reconciled"] is True
+
+    def test_fees(self):
+        assert self.result["mgmt_fee_pct"] == 1.5
+        assert self.result["incentive_fee_pct"] == 15.0
+
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 class TestEdgeCases:

@@ -19,8 +19,16 @@ import pdfplumber
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 _RETURN_PATTERN = re.compile(
-    r"([+-]?\d{1,3}\.\d{1,4})\s*%?"   # e.g. +1.82% or -0.91
+    r"\((\d{1,3}\.\d{1,4})\)\s*%?"     # e.g. (0.91)% — parenthetical negative
+    r"|([+-]?\d{1,3}\.\d{1,4})\s*%?"   # e.g. +1.82% or -0.91
 )
+
+
+def _parse_return_match(m) -> float:
+    """Extract float from a _RETURN_PATTERN match, handling parenthetical negatives."""
+    if m.group(1):  # parenthetical negative: (0.91)
+        return -float(m.group(1))
+    return float(m.group(2))  # standard: +1.82 or -0.91
 
 _MONTH_KEYWORDS = {
     "january", "february", "march", "april", "may", "june",
@@ -315,8 +323,8 @@ def _extract_fees(text: str) -> dict:
 
     # Pattern groups for incentive / performance fee
     _incentive_patterns = [
-        # "Incentive Allocation (10%)" or "Incentive Fee (20%)"
-        re.compile(r"incentive\s+(?:allocation|fee)\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        # "Incentive Allocation (10%)" or "Incentive Fee (20%)" or "Incentive Fee: 15%"
+        re.compile(r"incentive\s+(?:allocation|fee)\s*:?\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
         # "Performance Fee: 20%"
         re.compile(r"performance\s+fee\s*:?\s*(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
         # "20% incentive" or "20% performance fee"
@@ -450,12 +458,18 @@ def _is_month_cell(cell_text: str) -> bool:
 
 
 def _normalize_cell(cell) -> str:
-    """Normalize a table cell value for return parsing."""
+    """Normalize a table cell value for return parsing.
+    Handles parenthetical negatives: (0.91) → -0.91
+    """
     if cell is None:
         return ""
     s = str(cell).strip()
     # Remove percentage signs, plus signs, whitespace variants
     s = s.replace("%", "").replace("+", "").replace("\u00a0", " ").strip()
+    # Convert parenthetical negatives: (0.91) → -0.91
+    paren_m = re.match(r"^\((\d+(?:\.\d+)?)\)$", s)
+    if paren_m:
+        s = "-" + paren_m.group(1)
     return s
 
 
@@ -719,7 +733,7 @@ def _extract_monthly_returns_from_text(text: str, diagnostics: dict):
             m = _RETURN_PATTERN.search(line)
             if m:
                 try:
-                    val = float(m.group(1))
+                    val = _parse_return_match(m)
                     if -20 <= val <= 20:
                         returns.append(val / 100.0)
                 except ValueError:
@@ -781,7 +795,8 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
 
     # Step 2: collect year rows below the header
     year_data = {}  # {year: [float, ...]}
-    _pct_pattern = re.compile(r'([+-]?\d{1,3}\.\d{1,2})\s*%?')
+    # Parenthetical negatives: (0.91)% or (0.91) → negative
+    _pct_pattern = re.compile(r'\((\d{1,3}\.\d{1,2})\)\s*%?|([+-]?\d{1,3}\.\d{1,2})\s*%?')
 
     for line in lines[header_line_idx + 1:]:
         line_s = line.strip()
@@ -794,11 +809,15 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
 
         year = int(m.group(1))
         # Extract all %-like values from the rest of the line
+        # _pct_pattern returns (paren_group, standard_group) tuples
         values_raw = _pct_pattern.findall(line_s[4:])  # skip the year token
         parsed = []
-        for v in values_raw:
+        for paren_val, std_val in values_raw:
             try:
-                f = float(v)
+                if paren_val:  # parenthetical negative: (0.91) → -0.91
+                    f = -float(paren_val)
+                else:
+                    f = float(std_val)
                 if -50 <= f <= 50:   # wider range for annual returns / YTD
                     parsed.append(f)
             except ValueError:
@@ -914,9 +933,11 @@ def _extract_summary_performance(text: str) -> dict:
         for j in range(search_start, search_end):
             line = lines[j]
             line_l = line.lower()
-            pcts = re.findall(r"([+-]?\d{1,3}\.\d{1,2})\s*%", line)
-            if not pcts:
+            # Match parenthetical negatives and standard +/- format
+            pct_matches = re.findall(r"\((\d{1,3}\.\d{1,2})\)\s*%|([+-]?\d{1,3}\.\d{1,2})\s*%", line)
+            if not pct_matches:
                 continue
+            pcts = [-float(p) if p else float(s) for p, s in pct_matches]
 
             # Prefer "net return" / "NAV" lines; accept any line with enough %s
             is_net = any(kw in line_l for kw in return_keywords)
@@ -925,7 +946,7 @@ def _extract_summary_performance(text: str) -> dict:
             if is_net or has_enough:
                 for k, pct in enumerate(pcts):
                     if k < len(periods):
-                        summary[periods[k]] = float(pct) / 100.0
+                        summary[periods[k]] = pct / 100.0
                 if is_net:
                     break  # prefer net over gross, stop searching
 
