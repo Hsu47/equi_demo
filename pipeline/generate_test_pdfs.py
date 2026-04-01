@@ -67,6 +67,7 @@ GROUND_TRUTH = {
     "format_f_eur_denominated.pdf": {
         "monthly_returns": GT_MONTHLY,
         "aum_mm": 725.0,
+        "beginning_nav_mm": 654.78,
         "currency": "EUR",
         "return_type": "net",
     },
@@ -433,6 +434,7 @@ def build_format_f():
     story.append(Paragraph("Fund Overview", st["section"]))
     overview = [
         ["Fund Currency:", "EUR"],
+        ["Beginning NAV (Jan 1, 2025):", "\u20ac654,784,283"],
         ["Net Assets (Ending NAV):", "\u20ac725,000,000"],
         ["Strategy:", "European Credit Long/Short"],
         ["Inception:", "March 2018"],

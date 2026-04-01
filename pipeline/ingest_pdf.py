@@ -241,83 +241,84 @@ def _derive_ticker(fund_name: str, file_path: str) -> str:
     return os.path.splitext(os.path.basename(file_path))[0].upper()[:8]
 
 
-def _find_aum(text: str):
+def _try_parse_nav_amount(search_text: str):
     """
-    Extract ending NAV / AUM from text.
-    Handles:
-      - "$2,660,284.00" / "€2,660,284.00" / "£2,660,284.00"  (symbol prefix)
-      - "$2.66M" / "€2.66M" / "$2.66 million"  (abbreviated)
-      - "$2.66B" / "€2.66B" / "$2.66 billion"  (abbreviated)
-      - "2,660,284 USD" / "2,660,284 EUR"  (ISO code suffix)
-      - "NAV: 2,660,284"  (bare number on same or next line)
-      - "2.660.284,00" (European decimal format)
-      - Line-continuation where $ amount is on the next line
+    Try multiple NAV/AUM formats on a text string. Returns value in millions or None.
+
+    Supports:
+      - European decimal format: 2.660.284,00
+      - Symbol + abbreviated: $2.66M / €2.66 million / £2.66B
+      - Symbol + full: $2,660,284.00 / €2,660,284.00
+      - ISO code suffix: 2,660,284 EUR / 2,660,284 USD
+      - Bare large number: 2,660,284 (no currency indicator)
     """
-    lines = text.splitlines()
-    # Match any common currency symbol: $ € £ ¥
     _SYM = r"[\$€£¥]"
-    # Match any ISO currency code
     _ISO_CODES = "|".join(_CURRENCY_CODES)
 
-    def _try_parse_amount(search_text):
-        """Try multiple AUM formats on a text string. Returns value in millions or None."""
-        # Format 0: European decimal format near AUM label: 2.660.284,00
-        eu_val = _parse_european_number(search_text)
-        if eu_val is not None and eu_val > 100_000:
-            return round(eu_val / 1_000_000, 2)
-        # Format 1: [symbol]X.XXM / [symbol]X.XX million
-        m = re.search(_SYM + r"([\d,.]+)\s*[Mm](?:illion)?", search_text)
-        if m:
-            try:
-                return round(float(m.group(1).replace(",", "")), 2)
-            except ValueError:
-                pass
-        # Format 2: [symbol]X.XXB / [symbol]X.XX billion
-        m = re.search(_SYM + r"([\d,.]+)\s*[Bb](?:illion)?", search_text)
-        if m:
-            try:
-                return round(float(m.group(1).replace(",", "")) * 1000, 2)
-            except ValueError:
-                pass
-        # Format 3: [symbol]X,XXX,XXX.XX (standard format with currency symbol)
-        m = re.search(_SYM + r"([\d,]+(?:\.\d{1,2})?)", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        # Format 4: X,XXX,XXX [ISO_CODE] (e.g. "2,660,284 EUR")
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:" + _ISO_CODES + r")\b", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        # Format 5: bare large number (no currency symbol)
-        m = re.search(r"(?<!\d)([\d,]{7,}(?:\.\d{1,2})?)(?!\d)", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        return None
+    # Format 0: European decimal format: 2.660.284,00
+    eu_val = _parse_european_number(search_text)
+    if eu_val is not None and eu_val > 100_000:
+        return round(eu_val / 1_000_000, 2)
+    # Format 1: [symbol]X.XXM / [symbol]X.XX million
+    m = re.search(_SYM + r"([\d,.]+)\s*[Mm](?:illion)?", search_text)
+    if m:
+        try:
+            return round(float(m.group(1).replace(",", "")), 2)
+        except ValueError:
+            pass
+    # Format 2: [symbol]X.XXB / [symbol]X.XX billion
+    m = re.search(_SYM + r"([\d,.]+)\s*[Bb](?:illion)?", search_text)
+    if m:
+        try:
+            return round(float(m.group(1).replace(",", "")) * 1000, 2)
+        except ValueError:
+            pass
+    # Format 3: [symbol]X,XXX,XXX.XX (standard format with currency symbol)
+    m = re.search(_SYM + r"([\d,]+(?:\.\d{1,2})?)", search_text)
+    if m:
+        try:
+            val = float(m.group(1).replace(",", ""))
+            if val > 100_000:
+                return round(val / 1_000_000, 2)
+        except ValueError:
+            pass
+    # Format 4: X,XXX,XXX [ISO_CODE] (e.g. "2,660,284 EUR")
+    m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:" + _ISO_CODES + r")\b", search_text)
+    if m:
+        try:
+            val = float(m.group(1).replace(",", ""))
+            if val > 100_000:
+                return round(val / 1_000_000, 2)
+        except ValueError:
+            pass
+    # Format 5: bare large number (no currency symbol)
+    m = re.search(r"(?<!\d)([\d,]{7,}(?:\.\d{1,2})?)(?!\d)", search_text)
+    if m:
+        try:
+            val = float(m.group(1).replace(",", ""))
+            if val > 100_000:
+                return round(val / 1_000_000, 2)
+        except ValueError:
+            pass
+    return None
 
+
+def _find_nav_by_labels(text: str, labels: tuple):
+    """
+    Shared logic for extracting NAV values (ending or beginning) from text.
+    Searches for lines matching the given labels, then parses the amount.
+    """
+    lines = text.splitlines()
     for i, line in enumerate(lines):
         line_l = line.lower()
-        if any(lbl in line_l for lbl in _AUM_LABELS):
+        if any(lbl in line_l for lbl in labels):
             # Try current line
-            result = _try_parse_amount(line)
+            result = _try_parse_nav_amount(line)
             if result is not None:
                 return result
             # Try next line (line-continuation from pdfplumber)
             if i + 1 < len(lines):
-                result = _try_parse_amount(lines[i + 1])
+                result = _try_parse_nav_amount(lines[i + 1])
                 if result is not None:
                     return result
             # Try: label line ends with currency symbol and amount is at start of next line
@@ -333,46 +334,14 @@ def _find_aum(text: str):
     return None
 
 
+def _find_aum(text: str):
+    """Extract ending NAV / AUM from text. Supports multi-currency."""
+    return _find_nav_by_labels(text, _AUM_LABELS)
+
+
 def _find_beginning_nav(text: str):
-    """Extract beginning NAV using same multi-format logic as _find_aum."""
-    lines = text.splitlines()
-
-    def _try_parse_amount(search_text):
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
-        if m:
-            try:
-                return round(float(m.group(1).replace(",", "")), 2)
-            except ValueError:
-                pass
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        return None
-
-    for i, line in enumerate(lines):
-        line_l = line.lower()
-        if any(lbl in line_l for lbl in _BEGINNING_NAV_LABELS):
-            result = _try_parse_amount(line)
-            if result is not None:
-                return result
-            if i + 1 < len(lines):
-                result = _try_parse_amount(lines[i + 1])
-                if result is not None:
-                    return result
-    return None
+    """Extract beginning NAV from text. Supports multi-currency (€ £ ¥ + ISO codes + European decimals)."""
+    return _find_nav_by_labels(text, _BEGINNING_NAV_LABELS)
 
 
 def _extract_fees(text: str) -> dict:

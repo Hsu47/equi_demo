@@ -308,6 +308,17 @@ class TestFormatF:
     def test_method(self):
         assert self.ext["method"] == "table"
 
+    def test_beginning_nav_eur(self):
+        """Beginning NAV must be parsed from €-prefixed amount (multi-currency support)."""
+        assert self.result["beginning_nav_mm"] == self.gt["beginning_nav_mm"]
+
+    def test_nav_reconciliation_eur(self):
+        """EUR fund should have active NAV reconciliation (not silently skipped)."""
+        recon = self.ext["reconciliation"]
+        assert recon is not None, "Reconciliation should not be None for EUR fund with beginning NAV"
+        assert recon["reconciled"] is True
+        assert recon["delta_pct"] < 5.0
+
 
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
