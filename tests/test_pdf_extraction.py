@@ -7,7 +7,7 @@ Run: pytest tests/test_pdf_extraction.py -v
 import os
 import json
 import pytest
-from pipeline.ingest_pdf import load_fund_from_pdf
+from pipeline.ingest_pdf import load_fund_from_pdf, _detect_currency, _find_aum
 from pipeline.generate_test_pdfs import GROUND_TRUTH, GT_MONTHLY, GT_TRAILING_12
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -242,6 +242,60 @@ class TestEdgeCases:
         result = load_fund_from_pdf(SAMPLE_PDF)
         ext = result["extraction"]
         required = ["method", "confidence", "returns_count", "return_type",
-                     "warnings", "ocr_needed"]
+                     "warnings", "ocr_needed", "currency"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"
+
+    def test_currency_field_present(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        assert "currency" in result, "Missing currency field in output"
+        assert result["currency"] == "USD"
+
+
+# ── Multi-currency detection ────────────────────────────────────────────────
+
+class TestCurrencyDetection:
+    """Test currency detection from various text formats."""
+
+    def test_usd_via_dollar_sign(self):
+        assert _detect_currency("Ending NAV $2,660,284.00") == "USD"
+
+    def test_eur_via_symbol(self):
+        assert _detect_currency("Ending NAV €2,660,284.00") == "EUR"
+
+    def test_gbp_via_symbol(self):
+        assert _detect_currency("Total NAV £1,200,000.00") == "GBP"
+
+    def test_jpy_via_symbol(self):
+        assert _detect_currency("Fund Assets ¥500,000,000") == "JPY"
+
+    def test_eur_via_iso_code(self):
+        assert _detect_currency("Fund AUM 2,660,284 EUR") == "EUR"
+
+    def test_chf_via_iso_code(self):
+        assert _detect_currency("Total assets 5,000,000 CHF") == "CHF"
+
+    def test_default_usd(self):
+        assert _detect_currency("Some report without currency symbols") == "USD"
+
+    def test_gbp_iso_code(self):
+        assert _detect_currency("Net Assets 1,200,000 GBP") == "GBP"
+
+
+class TestMultiCurrencyAum:
+    """Test AUM parsing with non-USD currencies."""
+
+    def test_eur_standard(self):
+        assert _find_aum("Ending NAV €2,660,284.00") == 2.66
+
+    def test_gbp_abbreviated(self):
+        assert _find_aum("Fund Assets £1.5M") == 1.5
+
+    def test_jpy_billion(self):
+        assert _find_aum("Total NAV ¥2.5B") == 2500.0
+
+    def test_chf_iso_suffix(self):
+        assert _find_aum("Net Assets 5,000,000 CHF") == 5.0
+
+    def test_usd_still_works(self):
+        assert _find_aum("Ending NAV $2,660,284.00") == 2.66
