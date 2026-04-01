@@ -216,6 +216,41 @@ class TestFormatD:
 
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
+class TestFormatE:
+    """Format E: Accounting-style negatives (0.91) instead of -0.91."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, ensure_test_pdfs):
+        self.gt = GROUND_TRUTH["format_e_accounting_negatives.pdf"]
+        self.result = _load_test_pdf("format_e_accounting_negatives.pdf")
+        self.ext = self.result["extraction"]
+
+    def test_returns_exact_match(self):
+        """Must parse (X.XX) as -X.XX — negative months must NOT be dropped."""
+        expected = [r / 100 for r in self.gt["monthly_returns"]]
+        actual = self.result["raw_returns"]
+        assert len(actual) == 12, f"Got {len(actual)} months — negative months likely dropped"
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            assert abs(a - e) < 1e-6, f"Month {i+1}: {a} != {e}"
+
+    def test_has_negative_returns(self):
+        """Verify that negative months are actually present (not silently dropped)."""
+        negatives = [r for r in self.result["raw_returns"] if r < 0]
+        assert len(negatives) >= 3, f"Only {len(negatives)} negative months — expected >=3"
+
+    def test_aum(self):
+        assert self.result["aum_mm"] == self.gt["aum_mm"]
+
+    def test_return_type_is_net(self):
+        assert self.ext["return_type"] == "net"
+
+    def test_confidence(self):
+        assert self.ext["confidence"] >= 0.95
+
+    def test_method(self):
+        assert self.ext["method"] == "table"
+
+
 class TestEdgeCases:
     def test_nonexistent_pdf_raises(self):
         with pytest.raises(FileNotFoundError):

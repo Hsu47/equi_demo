@@ -19,7 +19,8 @@ import pdfplumber
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 _RETURN_PATTERN = re.compile(
-    r"([+-]?\d{1,3}\.\d{1,4})\s*%?"   # e.g. +1.82% or -0.91
+    r"([+-]?\d{1,3}\.\d{1,4})\s*%?"       # e.g. +1.82% or -0.91
+    r"|\((\d{1,3}\.\d{1,4})\)\s*%?"       # accounting negative: (0.91)%
 )
 
 _MONTH_KEYWORDS = {
@@ -450,12 +451,21 @@ def _is_month_cell(cell_text: str) -> bool:
 
 
 def _normalize_cell(cell) -> str:
-    """Normalize a table cell value for return parsing."""
+    """Normalize a table cell value for return parsing.
+
+    Handles accounting-style negatives: (0.91) → -0.91
+    Many fund admin reports (Citco, SS&C, NAV Consulting) and Big 4 audited
+    statements use parenthetical notation for negative numbers.
+    """
     if cell is None:
         return ""
     s = str(cell).strip()
     # Remove percentage signs, plus signs, whitespace variants
     s = s.replace("%", "").replace("+", "").replace("\u00a0", " ").strip()
+    # Accounting negatives: (1.23) → -1.23
+    m = re.match(r"^\((\d+(?:\.\d+)?)\)$", s)
+    if m:
+        s = "-" + m.group(1)
     return s
 
 
@@ -719,7 +729,11 @@ def _extract_monthly_returns_from_text(text: str, diagnostics: dict):
             m = _RETURN_PATTERN.search(line)
             if m:
                 try:
-                    val = float(m.group(1))
+                    # group(1) = normal number, group(2) = accounting negative
+                    if m.group(2) is not None:
+                        val = -float(m.group(2))
+                    else:
+                        val = float(m.group(1))
                     if -20 <= val <= 20:
                         returns.append(val / 100.0)
                 except ValueError:
@@ -781,7 +795,8 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
 
     # Step 2: collect year rows below the header
     year_data = {}  # {year: [float, ...]}
-    _pct_pattern = re.compile(r'([+-]?\d{1,3}\.\d{1,2})\s*%?')
+    # Matches normal numbers AND accounting negatives: (1.23)
+    _pct_pattern = re.compile(r'([+-]?\d{1,3}\.\d{1,2})\s*%?|\((\d{1,3}\.\d{1,2})\)\s*%?')
 
     for line in lines[header_line_idx + 1:]:
         line_s = line.strip()
@@ -796,9 +811,10 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
         # Extract all %-like values from the rest of the line
         values_raw = _pct_pattern.findall(line_s[4:])  # skip the year token
         parsed = []
-        for v in values_raw:
+        for grp1, grp2 in values_raw:
             try:
-                f = float(v)
+                # grp1 = normal number, grp2 = accounting negative
+                f = -float(grp2) if grp2 else float(grp1)
                 if -50 <= f <= 50:   # wider range for annual returns / YTD
                     parsed.append(f)
             except ValueError:

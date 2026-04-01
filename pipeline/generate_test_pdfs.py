@@ -56,6 +56,11 @@ GROUND_TRUTH = {
         "aum_mm": 3200.0,
         "trailing_period": True,  # should show trailing period, not calendar year
     },
+    "format_e_accounting_negatives.pdf": {
+        "monthly_returns": GT_MONTHLY,  # same values, just formatted with (X.XX)
+        "aum_mm": 680.0,
+        "return_type": "net",
+    },
 }
 
 
@@ -327,6 +332,64 @@ def build_format_d():
     print(f"  ✓ Format D (calendar grid, partial year): {path}")
 
 
+def build_format_e():
+    """
+    LP capital account statement using accounting-style negatives: (0.91) instead of -0.91.
+    Common in Big 4 audited statements and fund admin reports (Citco, SS&C).
+    Parser must convert (X.XX) to -X.XX — otherwise ALL negative months silently dropped.
+    """
+    path = os.path.join(OUTPUT_DIR, "format_e_accounting_negatives.pdf")
+    doc = SimpleDocTemplate(path, pagesize=letter,
+                            rightMargin=0.75*inch, leftMargin=0.75*inch,
+                            topMargin=0.75*inch, bottomMargin=0.6*inch)
+    st = _styles()
+    story = []
+
+    story.append(Paragraph("Ridgeline Capital Partners Fund LP", st["title"]))
+    story.append(Paragraph("Capital Account Statement — Year Ended December 31, 2025", st["sub"]))
+    story.append(Paragraph("Prepared by: Citco Fund Services", st["sub"]))
+    story.append(Spacer(1, 0.15*inch))
+
+    # Fund info
+    overview = [
+        ["Ending NAV", "$680,000,000"],
+        ["Management Fee", "1.5% annual"],
+        ["Incentive Allocation", "15%"],
+    ]
+    t = Table(overview, colWidths=[3*inch, 3*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Performance table with ACCOUNTING-STYLE NEGATIVES
+    story.append(Paragraph("Monthly Net Return (%)", st["section"]))
+    header = ["Month", "Net Return (%)"]
+    rows = [header]
+    for i, r in enumerate(GT_MONTHLY):
+        month_name = f"{GT_MONTHS[i]} 2025"
+        # Accounting convention: negatives in parentheses
+        if r < 0:
+            formatted = f"({abs(r):.2f})%"
+        else:
+            formatted = f"{r:.2f}%"
+        rows.append([month_name, formatted])
+    t = Table(rows, colWidths=[2.5*inch, 2*inch])
+    t.setStyle(_table_style_basic())
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph(
+        "Returns are net of all management fees and incentive allocations. "
+        "Negative returns are presented in parentheses per accounting convention.",
+        st["disc"]))
+    doc.build(story)
+    print(f"  ✓ Format E (accounting negatives): {path}")
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating test PDFs...")
@@ -334,6 +397,7 @@ def main():
     build_format_b()
     build_format_c()
     build_format_d()
+    build_format_e()
     print(f"\nGround truth for validation:")
     for name, gt in GROUND_TRUTH.items():
         print(f"  {name}: {len(gt['monthly_returns'])} months, AUM={gt.get('aum_mm')}")
