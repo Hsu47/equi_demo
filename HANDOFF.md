@@ -504,3 +504,77 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：什麼格式的「正確 PDF」會讓 parser 靜默地給出**方向性錯誤**的數據？
+
+答案：**會計格式的括號負數 (0.91)**。這是 LP 報告中最常見的負數表示法——
+會計標準用 `(0.91)` 而非 `-0.91` 表示虧損。
+
+現有 `_normalize_cell()` 只移除 `%` 和 `+`，不處理括號 →
+`float("(0.91)")` 直接拋 ValueError → 該行靜默跳過。
+
+後果：
+- 所有負報酬月份被丟棄，只保留正報酬月份
+- 基金報酬呈現**系統性向上偏差**（survivorship bias at month level）
+- 9/12 月份被抓到（只缺負的），confidence ~0.75 — 看起來「品質一般但可用」
+- LP 委員會看到的回報比實際好 → 可能做出錯的配置決策
+
+這比「缺資料」更危險——是**方向性錯誤的資料**。
+
+### DEV
+三處修改：
+1. **`_normalize_cell()`** — 新增括號負數轉換：`(0.91)` → `-0.91`（regex match）
+2. **`_extract_monthly_returns_from_text()`** — 新增 `_PAREN_NEG_PATTERN` 優先匹配括號格式
+3. **`_extract_calendar_text_format()`** — 在 regex scan 前先 `_PAREN_NEG_PATTERN.sub()` 預處理
+
+額外改進：
+- `_classify_return_type()` 新增 "net of all management"、"net of all applicable" 指標
+- 新增 `static/test_paren_negatives.pdf` 測試 PDF（reportlab 生成）
+- `tests/test_pdf_extraction.py` 新增 6 個測試（TestParenthetical class）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**42/42 tests PASSED** (2.10 seconds)
+
+| 測試場景 | 結果 |
+|---------|------|
+| sample_lp_report.pdf（regression） | 12/12 exact match, AUM=2.66, confidence=1.0 ✓ |
+| test_paren_negatives.pdf（table fallback→text） | 12/12 exact, 3 negatives preserved, confidence=0.85 ✓ |
+| calendar text + parens（模擬） | 12/12, 3 negatives preserved, YTD stripped ✓ |
+| Format A-D（existing regression） | All PASS ✓ |
+
+前後對比（括號格式 PDF）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| (0.91) 解析 | ValueError → 跳過 | → -0.91 ✓ |
+| 負月份 | 0/3 提取（全丟） | 3/3 提取 ✓ |
+| 月份數 | 9/12（只有正月） | 12/12 ✓ |
+| 報酬偏差 | 系統性向上偏差 ~3.5%/年 | 無偏差 |
+| confidence | ~0.75（看起來可用） | 0.85（真正可靠） |
+| return_type | "unknown" | "net"（修復了指標匹配） |
+
+LP 視角評估：
+- 這是防止「看起來合理但方向性錯誤」的關鍵修復
+- 會計格式的括號負數是 LP 報告的標準——不支援等於不支援一半的真實報告
+- 向上偏差 ~3.5%/年（如果只保留正月份），足以改變配置決策
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**多幣別 AUM 靜默錯誤**：
+- 目前 `_find_aum()` 匹配 `$` 符號或 bare number
+- 歐洲基金用 `€2.66M` 或 `EUR 2,660,284` — 我們的 regex 不匹配 `€`
+- 亞洲基金用 `¥266,028,400`（日圓）→ bare number match → 266.03M
+  但實際只值 ~$1.8M — **AUM 被高估 150 倍，靜默**
+- 需要：偵測幣別、標記 currency、必要時提示用戶確認匯率
+
+或者更有 demo 價值的：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級）
+- **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
+- **benchmark 提取** — 抓 benchmark return，讓 LP 做相對績效比較
