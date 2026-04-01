@@ -2,7 +2,7 @@
 
 ---
 
-## Current State (Post-Iteration 10)
+## Current State (Post-Iteration 11)
 
 **Parser 迭代已飽和** — regex-based extraction 覆蓋 7 種格式、55 tests 全通過。
 下一階段是跨量級跳躍：LLM fallback、PDF upload、cash flow 提取。
@@ -18,6 +18,7 @@
 - ✅ Multi-currency（EUR/GBP/JPY 偵測 + warning）
 - ✅ Parenthetical negatives（`(0.91)%` → `-0.91`）
 - ✅ Multi-currency beginning NAV（reconciliation 不再跳過非 USD 基金）
+- ✅ European comma decimal returns（`1,23%` → 正確解析為 1.23）
 - ✅ Frontend trust panel（confidence、reconciliation、fees、warnings 全上 UI）
 
 ### 驗證方式
@@ -688,3 +689,83 @@ LP 視角評估：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
 - **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
 - **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較（LP 最常問的問題之一）
+
+---
+
+## Iteration 11 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：歐洲 GP 的 return 格式 `1,23%` 會怎樣靜默破壞數據？
+
+靜默失敗鏈分析：
+1. 歐洲 GP 發送 `1,23%` 格式 → `_normalize_cell` 返回 `"1,23"`
+2. `float("1,23")` → ValueError → return 被跳過
+3. 12 個月全部跳過 → method = "failed" 或部分月份遺失
+4. LP 看到 confidence 下降但不知道原因 → 做出錯誤配置決策
+5. 更危險：parenthetical + comma 組合 `(0,91)%` 雙重解析失敗
+
+已有的歐洲格式支援（AUM: `1.234.567,89`）不覆蓋 return 值。Return 值是不同模式：沒有千位分隔符，只有逗號小數點。
+
+**決策：修復 `_normalize_cell` + `_RETURN_PATTERN` + text fallback 的歐洲逗號小數支援**
+
+### DEV
+1. **`_normalize_cell()` 擴展**：
+   - 新增歐洲逗號小數偵測：`1,23` → `1.23`、`-0,91` → `-0.91`
+   - 括號+逗號組合：`(0,45)` → `-0.45`
+   - 安全區分：只轉換逗號後 1-2 位數字（不誤觸千位分隔符 `1,234`）
+
+2. **`_RETURN_PATTERN` 擴展**：
+   - 正則從 `\d{1,3}\.\d{1,4}` 改為 `\d{1,3}[.,]\d{1,4}`
+   - `_parse_return_match()` 自動 `.replace(",", ".")`
+   - 影響 text fallback 和 calendar text 兩條路徑
+
+3. **Format G 測試 PDF**：
+   - 德國基金：`1,23%`、`(0,45)%`、`(1,33)%` 格式
+   - 含 Beginning NAV、Ending NAV、費用結構
+   - 9 個新測試（returns、negatives、AUM、NAV、currency、reconciliation、confidence、method）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**64/64 tests PASSED** (3.03 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Beginning NAV | Reconciled | Currency | Confidence |
+|-----|---------|-----|---------------|------------|----------|------------|
+| sample_lp_report.pdf | 12/12 ✓ | 2.66 ✓ | 2.45 ✓ | ✓ (δ=1.98%) | USD | 1.0 |
+| format_a (AQR factsheet) | 12/12 ✓ | 850.0 ✓ | — | — | USD | 0.94 |
+| format_b (ambiguous headers) | 12/12 ✓ | 450.41 ✓ | 420.0 ✓ | ✓ | USD | 1.0 |
+| format_c (gross + net cols) | 12/12 ✓ | 1200.0 ✓ | — | — | USD | 1.0 |
+| format_d (calendar grid) | 12/12 ✓ | 3200.0 ✓ | — | — | USD | 0.94 |
+| format_e (parenthetical neg) | 12/12 ✓ | 579.09 ✓ | 540.0 ✓ | ✓ | USD | 1.0 |
+| format_f (EUR fund) | 12/12 ✓ | 725.0 ✓ | 676.06 ✓ | ✓ (δ=0.0%) | EUR | 1.0 |
+| **format_g (EUR comma returns)** | **12/12 ✓** | **380.43 ✓** | **354.75 ✓** | **✓ (δ=0.0%)** | **EUR** | **1.0** |
+
+前後比較（歐洲逗號格式）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| `1,23%` cell | ValueError → return 被跳過 | 1.23 ✓ 正確解析 |
+| `(0,45)%` cell | ValueError → return 被跳過 | -0.45 ✓ 正確解析 |
+| 12 months extraction | 0/12（全部失敗）| 12/12 ✓ |
+| NAV reconciliation | None（no returns → no recon）| ✓ 通過 δ=0.0% |
+| Text fallback `1,23%` | 不匹配 RETURN_PATTERN | 匹配 ✓ |
+
+LP 視角評估：
+- 歐洲大陸 GP（德國、法國、荷蘭）普遍使用逗號小數格式
+- 修復前：這類報告會被完全靜默忽略，LP 不知道為什麼 extraction 失敗
+- 修復後：無縫處理，confidence=1.0，reconciliation 通過
+- 安全性：只轉換逗號後 1-2 位數字，不會誤觸美式千位分隔符
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**DRY refactor `_try_parse_amount`**（P4 → 升級為 P2）：
+- `_find_aum` 和 `_find_beginning_nav` 有完全相同的 `_try_parse_amount` 內嵌函數（~50 行 × 2）
+- 如果只改其中一個（例如新增格式支援），另一個會靜默落後
+- 已在 iteration 10 發生過（EUR beginning NAV 因為沒有鏡像 AUM 邏輯而失敗）
+- 應提取為共用 `_parse_currency_amount(text)` → 單一修改點
+
+或者更有 demo 衝擊力的方向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **PDF upload UI** — demo 可上傳任意 PDF，不只 sample
