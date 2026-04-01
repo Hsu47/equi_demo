@@ -446,6 +446,12 @@
 
     <div class="pdf-result" id="pdf-result">
       <div style="font-size:0.8rem;margin-bottom:14px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px" id="pdf-meta"></div>
+
+      <!-- Extraction Trust Panel -->
+      <div class="pdf-section-label">extraction trust signals</div>
+      <div class="pdf-metrics" id="pdf-trust" style="margin-bottom:18px"></div>
+      <div id="pdf-warnings" style="margin-bottom:14px"></div>
+
       <div class="pdf-section-label">12 monthly returns extracted</div>
       <div class="returns-grid" id="pdf-returns"></div>
       <div class="pdf-section-label" style="margin-top:16px">pipeline output — scored</div>
@@ -1049,6 +1055,34 @@ function runPdfDemo() {
       `&nbsp;·&nbsp; method: <code style="color:var(--accent)">${d.extraction.method}</code>`+
       `&nbsp;·&nbsp; ${d.extraction.returns_count} months extracted from ${d.extraction.pages_scanned} pages`+
       `&nbsp;·&nbsp; <strong style="color:var(--accent)">${d.extract_ms}ms</strong>`;
+
+    // ── Trust signals panel ──
+    const ex = d.extraction;
+    const confColor = ex.confidence >= 0.9 ? 'var(--green)' : ex.confidence >= 0.7 ? 'var(--yellow)' : 'var(--red)';
+    const reconLabel = ex.reconciliation
+      ? (ex.reconciliation.reconciled ? `✓ δ=${ex.reconciliation.delta_pct}%` : `✗ δ=${ex.reconciliation.delta_pct}%`)
+      : '—';
+    const reconColor = ex.reconciliation
+      ? (ex.reconciliation.reconciled ? 'var(--green)' : 'var(--red)')
+      : 'var(--muted)';
+    const feeStr = [
+      d.extraction.fee_source ? `${d.mgmt_fee_pct ?? '?'}% mgmt` : null,
+      d.extraction.fee_source ? `${d.incentive_fee_pct ?? '?'}% perf` : null,
+    ].filter(Boolean).join(' / ') || '—';
+
+    document.getElementById('pdf-trust').innerHTML = `
+      <div class="pdf-metric"><div class="pm-val" style="color:${confColor}">${ex.confidence.toFixed(2)}</div><div class="pm-lbl">Confidence</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:${reconColor};font-size:0.95rem">${reconLabel}</div><div class="pm-lbl">NAV Reconciliation</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--text)">${ex.return_type || '?'}</div><div class="pm-lbl">Return Type</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--accent)">${ex.currency || 'USD'}</div><div class="pm-lbl">Currency</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--text);font-size:0.95rem">${feeStr}</div><div class="pm-lbl">Fee Structure</div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--muted)">${ex.method}</div><div class="pm-lbl">Parse Method</div></div>`;
+
+    // Warnings
+    const warns = ex.warnings || [];
+    document.getElementById('pdf-warnings').innerHTML = warns.length > 0
+      ? warns.map(w => `<div style="font-size:0.72rem;color:var(--yellow);padding:4px 0">⚠ ${w}</div>`).join('')
+      : `<div style="font-size:0.72rem;color:var(--green)">✓ No warnings — all extraction checks passed</div>`;
 
     document.getElementById('pdf-returns').innerHTML =
       d.raw_returns_preview.map((r, i) => {
