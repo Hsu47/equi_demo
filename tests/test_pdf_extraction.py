@@ -309,6 +309,59 @@ class TestFormatF:
         assert self.ext["method"] == "table"
 
 
+class TestFormatG:
+    """Format G: European comma-decimal returns (1,23% not 1.23%) with EUR currency."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, ensure_test_pdfs):
+        self.gt = GROUND_TRUTH["format_g_comma_decimal.pdf"]
+        self.result = _load_test_pdf("format_g_comma_decimal.pdf")
+        self.ext = self.result["extraction"]
+
+    def test_returns_exact_match(self):
+        """Critical: comma-decimal returns must be parsed correctly (1,23% → 0.0123)."""
+        expected = [r / 100 for r in self.gt["monthly_returns"]]
+        actual = self.result["raw_returns"]
+        assert len(actual) == 12
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            assert abs(a - e) < 1e-6, f"Month {i+1}: {a} != {e}"
+
+    def test_aum(self):
+        """European-format AUM (480.000.000 with period thousands) must parse correctly."""
+        assert self.result["aum_mm"] == self.gt["aum_mm"]
+
+    def test_currency_is_eur(self):
+        assert self.result["currency"] == "EUR"
+
+    def test_comma_decimal_detected(self):
+        """Parser must flag that European comma-decimal format was detected."""
+        assert self.ext["comma_decimal_detected"] is True
+
+    def test_comma_decimal_warning(self):
+        """Comma-decimal detection should produce a warning for LP analysts."""
+        warnings = self.ext["warnings"]
+        assert any("comma-decimal" in w.lower() for w in warnings)
+
+    def test_fees_with_comma_decimal(self):
+        """Fee parsing must handle comma-decimal: 1,50% → 1.5."""
+        assert self.result["mgmt_fee_pct"] == 1.5
+        assert self.result["incentive_fee_pct"] == 20.0
+
+    def test_return_type(self):
+        assert self.ext["return_type"] == "net"
+
+    def test_confidence(self):
+        """Confidence should be reasonable despite comma-decimal + non-USD."""
+        assert self.ext["confidence"] >= 0.85
+
+    def test_method(self):
+        assert self.ext["method"] == "table"
+
+    def test_fund_name(self):
+        """German fund name with 'Fonds' must be detected."""
+        assert "Nordischer" in self.result["name"] or "Fonds" in self.result["name"]
+
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 class TestEdgeCases:

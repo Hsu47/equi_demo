@@ -667,6 +667,107 @@ LP 視角評估：
 - 如果部分 return 被跳過 → 只剩 6-8 個月 → confidence 下降但不夠低
 - 需要在 `_normalize_cell()` 和 `_RETURN_PATTERN` 中加入逗號小數偵測
 
+---
+
+## Iteration 10 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：Iteration 9 加了多幣別支援（EUR/GBP/JPY），但 return 值本身的歐洲小數格式被忽略了。
+
+靜默失敗模式分析：
+1. **Return 用逗號小數 `1,23%`**：`float("1,23")` → ValueError → return 被跳過
+2. **Parser 靜默丟失月份**：只剩 6-8 個月 → 看起來「勉強能用」但數據不完整
+3. **Fee 用逗號小數 `1,50%`**：`float("1,50")` → ValueError → fee 為 None
+4. **AUM 用歐洲整數格式 `480.000.000`**（句號當千位分隔符，無逗號小數）→ 不匹配現有 pattern → AUM = None
+5. **德語基金名稱 "Fonds"**：parser 只認 "Fund" → 基金名稱 = "Unknown Fund"
+
+這些問題的共同點：Iteration 9 告訴 LP「我們支援歐洲基金」，但實際上只修了半截。
+
+**決策：歐洲逗號小數全面修復 — return / fee / AUM / fund name**
+
+### DEV
+1. **`_RETURN_PATTERN` 更新**：
+   - `\d{1,3}\.\d{1,4}` → `\d{1,3}[.,]\d{1,4}`（同時匹配 `.` 和 `,`）
+   - `_parse_return_match()` 新增 `.replace(",", ".")`
+
+2. **`_normalize_cell()` 更新**：
+   - 偵測 `^\d{1,3},\d{1,4}$` pattern → 逗號轉句號
+   - 括號負數也支援逗號：`(0,91)` → `-0.91`
+
+3. **`_extract_calendar_text_format()` 更新**：
+   - `_pct_pattern` 改為 `[.,]` 匹配，`.replace(",", ".")`
+
+4. **`_extract_summary_performance()` 更新**：
+   - 同樣修復 pct_matches 的逗號小數支援
+
+5. **`_extract_fees()` 更新**：
+   - Fee pattern 改為 `[.,]` 匹配，`float(m.group(1).replace(",", "."))`
+
+6. **`_parse_european_number()` 擴展**：
+   - 支援無小數部分的歐洲整數：`480.000.000` → 480000000
+
+7. **`_find_fund_name()` 擴展**：
+   - 加入 "fonds"（德語）、"fonds lp" 關鍵字
+
+8. **`_AUM_LABELS` 擴展**：
+   - 加入 "nettoinventarwert"（德語 NAV）
+
+9. **Comma-decimal 偵測 + warning**：
+   - 掃描文件中 `\d{1,3},\d{1,4}\s*%` 出現次數
+   - ≥3 次 → `comma_decimal_detected = True` + warning
+   - 輸出新增 `extraction.comma_decimal_detected` 欄位
+
+10. **Format G 測試 PDF**（Nordischer Kredit Fonds LP, EUR, comma-decimal）：
+    - 所有 return 值用 `1,23%` 格式
+    - AUM 用 `€480.000.000` 格式
+    - Fee 用 `1,50%` 格式
+    - 德語基金名稱 + "Fonds LP"
+    - 11 個新測試案例
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**62/62 tests PASSED** (2.68 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Currency | Confidence | Method | Comma-Dec |
+|-----|---------|-----|----------|------------|--------|-----------|
+| sample_lp_report.pdf | 12/12 ✓ | 2.66 ✓ | USD ✓ | 1.0 | table | No |
+| format_a (AQR factsheet) | 12/12 ✓ | 850.0 ✓ | USD ✓ | 0.94 | calendar_text | No |
+| format_b (ambiguous headers) | 12/12 ✓ | 450.41 ✓ | USD ✓ | 1.0 | table | No |
+| format_c (gross + net cols) | 12/12 ✓ | 1200.0 ✓ | USD ✓ | 1.0 | table | No |
+| format_d (calendar grid) | 12/12 ✓ | 3200.0 ✓ | USD ✓ | 0.94 | calendar_text | No |
+| format_e (parenthetical neg) | 12/12 ✓ | 579.09 ✓ | USD ✓ | 1.0 | table | No |
+| format_f (EUR fund) | 12/12 ✓ | 725.0 ✓ | EUR ✓ | 0.99 | table | No |
+| **format_g (comma-decimal)** | **12/12 ✓** | **480.0 ✓** | **EUR ✓** | **0.98** | **table** | **Yes ✓** |
+
+前後比較（歐洲逗號小數 PDF 處理）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| `1,23%` return | ValueError → 月份被跳過 | 正確解析為 0.0123 |
+| `(0,91)%` 負數 | ValueError → 月份被跳過 | 正確解析為 -0.0091 |
+| `€480.000.000` AUM | None（pattern 要求逗號小數部分） | 480.0 ✓ |
+| `1,50%` mgmt fee | None（float 解析失敗） | 1.5 ✓ |
+| "Nordischer Kredit Fonds LP" | "Unknown Fund" | 正確偵測 ✓ |
+| Comma-decimal 偵測 | 無 | `comma_decimal_detected: true` + warning |
+
+LP 視角評估：
+- 現在「支援歐洲基金」是真的支援 — return、AUM、fee 三個維度都正確解析
+- 逗號小數 warning 讓 LP 團隊知道這份 PDF 使用非標準格式，可以額外驗證
+- 德語基金名稱偵測 → 不再顯示 "Unknown Fund"，LP 可以在 portfolio view 中辨識
+- 與 Iteration 9 的幣別偵測形成完整覆蓋：currency × decimal format × fund name
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**多表格混淆 — 風險統計表 vs 績效表**：
+- 有些 LP 報告在績效表之後緊接著風險統計表（Annualized Vol, Sharpe, Max DD）
+- 這些數字也是小數，也可能落在 -20 ~ 20 的 return 範圍內
+- 目前 `_is_header_row()` 有 `_RISK_TABLE_KEYWORDS` 過濾，但如果風險表沒有明確標題？
+- 可能把 Sharpe=1.45 當作 return=1.45% → 多出一個假月份
+- 需要更強的「表格邊界偵測」— 當一張表結束後，不要繼續把下一張表的數字吃進來
+
 或者更有 demo 價值的方向：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
 - **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）

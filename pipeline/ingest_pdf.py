@@ -19,16 +19,16 @@ import pdfplumber
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 _RETURN_PATTERN = re.compile(
-    r"\((\d{1,3}\.\d{1,4})\)\s*%?"     # e.g. (0.91)% — parenthetical negative
-    r"|([+-]?\d{1,3}\.\d{1,4})\s*%?"   # e.g. +1.82% or -0.91
+    r"\((\d{1,3}[.,]\d{1,4})\)\s*%?"     # e.g. (0.91)% or (0,91)% — parenthetical negative
+    r"|([+-]?\d{1,3}[.,]\d{1,4})\s*%?"   # e.g. +1.82% or -0.91 or 1,82%
 )
 
 
 def _parse_return_match(m) -> float:
-    """Extract float from a _RETURN_PATTERN match, handling parenthetical negatives."""
-    if m.group(1):  # parenthetical negative: (0.91)
-        return -float(m.group(1))
-    return float(m.group(2))  # standard: +1.82 or -0.91
+    """Extract float from a _RETURN_PATTERN match, handling parenthetical negatives and comma decimals."""
+    if m.group(1):  # parenthetical negative: (0.91) or (0,91)
+        return -float(m.group(1).replace(",", "."))
+    return float(m.group(2).replace(",", "."))  # standard: +1.82 or -0.91 or 1,82
 
 _MONTH_KEYWORDS = {
     "january", "february", "march", "april", "may", "june",
@@ -47,7 +47,8 @@ _CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY"}
 _CURRENCY_CODES = {"USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "SGD", "HKD", "CNY", "KRW", "SEK", "NOK", "DKK"}
 
 # European decimal format: 1.234.567,89 (periods = thousands, comma = decimal)
-_EUROPEAN_NUMBER_PATTERN = re.compile(r"(\d{1,3}(?:\.\d{3})+),(\d{1,2})")
+_EUROPEAN_NUMBER_PATTERN = re.compile(r"(\d{1,3}(?:\.\d{3})+)(?:,(\d{1,2}))?")
+# Matches: 1.234.567,89 or 480.000.000 (no decimal part)
 
 
 def _detect_currency(text: str) -> dict:
@@ -110,18 +111,21 @@ def _detect_currency(text: str) -> dict:
 
 
 def _parse_european_number(text: str) -> float:
-    """Convert European-format number to float: 1.234.567,89 → 1234567.89"""
+    """Convert European-format number to float: 1.234.567,89 → 1234567.89 or 480.000.000 → 480000000"""
     m = _EUROPEAN_NUMBER_PATTERN.search(text)
     if m:
         integer_part = m.group(1).replace(".", "")  # remove thousands separators
         decimal_part = m.group(2)
-        return float(f"{integer_part}.{decimal_part}")
+        if decimal_part:
+            return float(f"{integer_part}.{decimal_part}")
+        return float(integer_part)
     return None
 
 
-_FUND_NAME_LABELS    = ("fund name", "fund:", "managed by", "fund lp", "capital fund", "macro fund")
+_FUND_NAME_LABELS    = ("fund name", "fund:", "managed by", "fund lp", "capital fund", "macro fund", "fonds lp", "fonds")
 _AUM_LABELS          = ("ending nav", "ending capital", "total nav", "fund aum",
-                        "fund assets", "total assets", "net assets", "fund size")
+                        "fund assets", "total assets", "net assets", "fund size",
+                        "nettoinventarwert")
 _BEGINNING_NAV_LABELS = ("beginning nav", "beginning capital", "beginning balance",
                           "opening nav", "opening capital", "opening balance",
                           "beg. nav", "beg nav", "start nav")
@@ -211,14 +215,14 @@ def _find_fund_name(text: str) -> str:
         # Skip lines that are clearly not fund names
         if any(skip in line_l for skip in ("inception", "expense", "cusip", "listing")):
             continue
-        if any(kw in line_l for kw in ("fund lp", "fund, lp", "capital lp", "macro fund", "credit fund")):
+        if any(kw in line_l for kw in ("fund lp", "fund, lp", "capital lp", "macro fund", "credit fund", "fonds lp")):
             return line.strip()
-    # Second pass: look for "ETF" or "Fund" in short lines
+    # Second pass: look for "ETF", "Fund", or "Fonds" in short lines
     for line in text.splitlines():
         line_l = line.lower()
         if any(skip in line_l for skip in ("inception", "expense", "cusip", "listing", "return")):
             continue
-        if ("etf" in line_l or "fund" in line_l) and len(line.split()) <= 8 and len(line) > 8:
+        if ("etf" in line_l or "fund" in line_l or "fonds" in line_l) and len(line.split()) <= 8 and len(line) > 8:
             return line.strip()
     return "Unknown Fund"
 
@@ -397,24 +401,27 @@ def _extract_fees(text: str) -> dict:
     result = {"mgmt_fee_pct": None, "incentive_fee_pct": None, "fee_source": None}
     lines = text.splitlines()
 
+    # Fee decimal pattern: matches both 1.5 and 1,5 (European comma-decimal)
+    _FEE_NUM = r"(\d{1,2}(?:[.,]\d{1,2})?)"
+
     # Pattern groups for management fee
     _mgmt_patterns = [
-        # "Management Fee (1% annual)" or "Management Fees (1.5%)"
-        re.compile(r"management\s+fees?\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        # "Management Fee (1% annual)" or "Management Fees (1.5%)" or "Management Fee: 1,50%"
+        re.compile(r"management\s+fees?\s*\(?" + _FEE_NUM + r"\s*%", re.IGNORECASE),
         # "Management Fee: 1.5%" or "Mgmt Fee: 2%"
-        re.compile(r"(?:management|mgmt)\s+fee\s*:?\s*(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
-        # "1.5% management fee"
-        re.compile(r"(\d{1,2}(?:\.\d{1,2})?)\s*%\s*(?:management|mgmt)\s+fee", re.IGNORECASE),
+        re.compile(r"(?:management|mgmt)\s+fee\s*:?\s*" + _FEE_NUM + r"\s*%", re.IGNORECASE),
+        # "1.5% management fee" or "1,50% management fee"
+        re.compile(_FEE_NUM + r"\s*%\s*(?:management|mgmt)\s+fee", re.IGNORECASE),
     ]
 
     # Pattern groups for incentive / performance fee
     _incentive_patterns = [
         # "Incentive Allocation (10%)" or "Incentive Fee (20%)" or "Incentive Fee: 15%"
-        re.compile(r"incentive\s+(?:allocation|fee)\s*:?\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        re.compile(r"incentive\s+(?:allocation|fee)\s*:?\s*\(?" + _FEE_NUM + r"\s*%", re.IGNORECASE),
         # "Performance Fee: 20%" or "Performance Fees (15%)"
-        re.compile(r"performance\s+fees?\s*:?\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        re.compile(r"performance\s+fees?\s*:?\s*\(?" + _FEE_NUM + r"\s*%", re.IGNORECASE),
         # "20% incentive" or "20% performance fee"
-        re.compile(r"(\d{1,2}(?:\.\d{1,2})?)\s*%\s*(?:incentive|performance\s+fees?)", re.IGNORECASE),
+        re.compile(_FEE_NUM + r"\s*%\s*(?:incentive|performance\s+fees?)", re.IGNORECASE),
     ]
 
     full_text = text.lower()
@@ -424,7 +431,7 @@ def _extract_fees(text: str) -> dict:
         m = pat.search(text)
         if m:
             try:
-                val = float(m.group(1))
+                val = float(m.group(1).replace(",", "."))
                 if 0 < val <= 10:  # sanity: mgmt fee 0.1% to 10%
                     result["mgmt_fee_pct"] = val
                     result["fee_source"] = "explicit"
@@ -437,7 +444,7 @@ def _extract_fees(text: str) -> dict:
         m = pat.search(text)
         if m:
             try:
-                val = float(m.group(1))
+                val = float(m.group(1).replace(",", "."))
                 if 0 < val <= 50:  # sanity: incentive fee up to 50%
                     result["incentive_fee_pct"] = val
                     if result["fee_source"] is None:
@@ -545,17 +552,23 @@ def _is_month_cell(cell_text: str) -> bool:
 
 def _normalize_cell(cell) -> str:
     """Normalize a table cell value for return parsing.
-    Handles parenthetical negatives: (0.91) → -0.91
+    Handles:
+      - Parenthetical negatives: (0.91) → -0.91
+      - European comma-decimal: 1,23 → 1.23
     """
     if cell is None:
         return ""
     s = str(cell).strip()
     # Remove percentage signs, plus signs, whitespace variants
     s = s.replace("%", "").replace("+", "").replace("\u00a0", " ").strip()
-    # Convert parenthetical negatives: (0.91) → -0.91
-    paren_m = re.match(r"^\((\d+(?:\.\d+)?)\)$", s)
+    # Convert parenthetical negatives: (0.91) or (0,91) → -0.91
+    paren_m = re.match(r"^\((\d+(?:[.,]\d+)?)\)$", s)
     if paren_m:
-        s = "-" + paren_m.group(1)
+        s = "-" + paren_m.group(1).replace(",", ".")
+    # Convert European comma-decimal: 1,23 → 1.23 (only if no period present)
+    # Pattern: digits, comma, 1-4 digits (not thousands separator like 1,234)
+    elif re.match(r"^-?\d{1,3},\d{1,4}$", s):
+        s = s.replace(",", ".")
     return s
 
 
@@ -881,8 +894,8 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
 
     # Step 2: collect year rows below the header
     year_data = {}  # {year: [float, ...]}
-    # Parenthetical negatives: (0.91)% or (0.91) → negative
-    _pct_pattern = re.compile(r'\((\d{1,3}\.\d{1,2})\)\s*%?|([+-]?\d{1,3}\.\d{1,2})\s*%?')
+    # Parenthetical negatives: (0.91)% or (0,91)% → negative; comma-decimal: 1,82%
+    _pct_pattern = re.compile(r'\((\d{1,3}[.,]\d{1,2})\)\s*%?|([+-]?\d{1,3}[.,]\d{1,2})\s*%?')
 
     for line in lines[header_line_idx + 1:]:
         line_s = line.strip()
@@ -900,10 +913,10 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
         parsed = []
         for paren_val, std_val in values_raw:
             try:
-                if paren_val:  # parenthetical negative: (0.91) → -0.91
-                    f = -float(paren_val)
+                if paren_val:  # parenthetical negative: (0.91) or (0,91) → -0.91
+                    f = -float(paren_val.replace(",", "."))
                 else:
-                    f = float(std_val)
+                    f = float(std_val.replace(",", "."))
                 if -50 <= f <= 50:   # wider range for annual returns / YTD
                     parsed.append(f)
             except ValueError:
@@ -1019,11 +1032,11 @@ def _extract_summary_performance(text: str) -> dict:
         for j in range(search_start, search_end):
             line = lines[j]
             line_l = line.lower()
-            # Match parenthetical negatives and standard +/- format
-            pct_matches = re.findall(r"\((\d{1,3}\.\d{1,2})\)\s*%|([+-]?\d{1,3}\.\d{1,2})\s*%", line)
+            # Match parenthetical negatives, standard +/- format, and comma-decimal
+            pct_matches = re.findall(r"\((\d{1,3}[.,]\d{1,2})\)\s*%|([+-]?\d{1,3}[.,]\d{1,2})\s*%", line)
             if not pct_matches:
                 continue
-            pcts = [-float(p) if p else float(s) for p, s in pct_matches]
+            pcts = [-float(p.replace(",", ".")) if p else float(s.replace(",", ".")) for p, s in pct_matches]
 
             # Prefer "net return" / "NAV" lines; accept any line with enough %s
             is_net = any(kw in line_l for kw in return_keywords)
@@ -1158,6 +1171,16 @@ def load_fund_from_pdf(path: str) -> dict:
                 f"vs stated {aum_mm}M (delta {reconciliation['delta_pct']}%)"
             )
 
+    # ── Comma-decimal detection ─────────────────────────────────────────────
+    # Scan text for European comma-decimal return patterns (e.g., 1,23% or -0,91%)
+    _comma_decimal_hits = len(re.findall(r'[+-]?\d{1,3},\d{1,4}\s*%', text))
+    comma_decimal_detected = _comma_decimal_hits >= 3  # need multiple hits to be confident
+    if comma_decimal_detected:
+        warnings.append(
+            f"European comma-decimal format detected in returns ({_comma_decimal_hits} instances). "
+            f"Values like '1,23%' interpreted as 1.23%. Verify decimal separator convention."
+        )
+
     # ── Currency warning ──────────────────────────────────────────────────────
     if currency_info["currency"] != "USD":
         warnings.append(
@@ -1237,6 +1260,7 @@ def load_fund_from_pdf(path: str) -> dict:
             "fee_source":       fees["fee_source"],
             "calendar_year":         diagnostics.get("calendar_text_year_used"),
             "trailing_12_period":    diagnostics.get("calendar_text_trailing_12_period"),
+            "comma_decimal_detected": comma_decimal_detected,
             "ocr_needed":       ocr_info["ocr_needed"],
             "low_text_pages":   ocr_info["low_text_pages"],
             "avg_chars_per_page": ocr_info["avg_chars_per_page"],
