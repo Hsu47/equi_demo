@@ -584,3 +584,90 @@ LP 視角評估：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API
 - **v2.5: Format Registry** — 記住 GP 格式指紋
 - **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較
+
+---
+
+## Iteration 9 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：LP 投資組合是多幣別的（CalPERS 持有歐洲、亞洲基金），但 parser 假設所有金額都是 USD。
+
+靜默失敗模式分析：
+1. **€ 符號 → AUM 找不到**：parser 只找 `$`，EUR 報告的 NAV = None（至少不靜默）
+2. **$ 但實際是 AUD/CAD/SGD**：parser 回傳 AUM，但幣別錯誤 → 配置計算全錯
+3. **歐洲小數格式 `1.234,56`**：`float("1.234")` = 1.234（少了 3 個數量級！）→ AUM 錯 1000 倍
+4. **混合幣別 PDF**：NAV 用 EUR，fee 描述用 USD → 零 warning
+
+這些都是「數字看起來合理但完全錯誤」的情境。
+
+**決策：多幣別偵測 + € £ ¥ AUM 解析 + 歐洲小數格式支援**
+
+### DEV
+1. **`_detect_currency(text)`**：3 層偵測策略
+   - Tier 1：explicit statement（"denominated in EUR", "Fund Currency: EUR"）
+   - Tier 2：AUM label 附近的貨幣符號/ISO code
+   - Tier 3：文件中最頻繁的貨幣符號
+   - Default：USD（最常見，不產生 warning）
+
+2. **`_find_aum()` 擴展**：
+   - 支援 € £ ¥ 符號（原本只支援 $）
+   - 支援 ISO code suffix（"2,660,284 EUR"）
+   - 新增歐洲小數格式解析：`_parse_european_number("1.234.567,89")` → 1234567.89
+
+3. **`_extract_fees()` 修復**：
+   - "performance fees"（複數）pattern 修復（原本只匹配 "fee" 單數）
+
+4. **輸出新增欄位**：
+   - Top-level: `currency` (ISO code)
+   - Extraction: `currency`, `currency_source`
+   - Non-USD 自動產生 warning
+
+5. **Format F 測試 PDF**（EUR-denominated European fund）：
+   - €725M AUM, 1.25% mgmt fee, 15% performance fee
+   - "Fund Currency: EUR" + "denominated in EUR" 明確標記
+   - 9 個新測試案例
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**52/52 tests PASSED** (2.46 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Currency | Confidence | Method |
+|-----|---------|-----|----------|------------|--------|
+| sample_lp_report.pdf | 12/12 ✓ | 2.66 ✓ | USD ✓ | 1.0 | table |
+| format_a (AQR factsheet) | 12/12 ✓ | 850.0 ✓ | USD ✓ | 0.94 | calendar_text |
+| format_b (ambiguous headers) | 12/12 ✓ | 450.41 ✓ | USD ✓ | 1.0 | table |
+| format_c (gross + net cols) | 12/12 ✓ | 1200.0 ✓ | USD ✓ | 1.0 | table |
+| format_d (calendar grid) | 12/12 ✓ | 3200.0 ✓ | USD ✓ | 0.94 | calendar_text |
+| format_e (parenthetical neg) | 12/12 ✓ | 579.09 ✓ | USD ✓ | 1.0 | table |
+| **format_f (EUR fund)** | **12/12 ✓** | **725.0 ✓** | **EUR ✓** | **0.99** | **table** |
+
+前後比較（EUR PDF 處理）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| €725,000,000 | AUM = None（找不到 $） | AUM = 725.0（✓ 正確解析 €） |
+| Currency | 無欄位（隱含 USD） | currency = "EUR"，source = "explicit" |
+| Warning | 無 | "Non-USD currency detected: EUR" |
+| LP 做配置計算 | €725M 被當 $725M 或丟失 | 明確標記 EUR，提醒轉換 |
+
+LP 視角評估：
+- CalPERS alts team 管理 20+ 幣別的基金 → currency field 讓他們立即知道需要匯率轉換
+- 不再有「把 EUR AUM 當 USD AUM」的風險 → 配置比例計算正確
+- 歐洲小數格式支援 → 防止 AUM 少 1000 倍的災難性解析錯誤
+- "performance fees"（複數）fix 是附帶修復，但確保歐洲基金的 fee 結構正確提取
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**歐洲小數格式的 return 值**：
+- 目前只修了 AUM 的歐洲格式，但如果 return 也用 `1,23%`（逗號當小數點）？
+- `float("1,23")` 會直接 ValueError → return 被跳過
+- 如果部分 return 被跳過 → 只剩 6-8 個月 → confidence 下降但不夠低
+- 需要在 `_normalize_cell()` 和 `_RETURN_PATTERN` 中加入逗號小數偵測
+
+或者更有 demo 價值的方向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
+- **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較（LP 最常問的問題之一）
