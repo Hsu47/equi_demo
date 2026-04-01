@@ -584,3 +584,89 @@ LP 視角評估：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API
 - **v2.5: Format Registry** — 記住 GP 格式指紋
 - **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較
+
+---
+
+## Iteration 9 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：LP 配置國際基金時（歐洲、亞洲），PDF 報告用 EUR/GBP/JPY 計價。Parser 目前只認 `$` 和 `USD`。
+
+靜默錯誤分析：
+- **完全漏抓（低風險但體驗差）**：`€720,000,000` 沒有 `$` → `_find_aum` 回傳 `None` → AUM 欄位空白
+- **貨幣誤標（中等風險）**：即使 AUM 為空，LP 分析師可能手動輸入但假設 USD
+- **歐洲數字格式靜默誤算（高風險）**：`1.234.567,89` 被 US 格式解析器解析可能得到完全錯誤的數字
+- 所有情況都沒有 warning — parser 不知道自己不懂非 USD
+
+決策：**多幣別 AUM 解析 + 幣別偵測 + 歐洲數字格式支援**
+
+### DEV
+修改 3 個核心元件 + 新增 1 個測試格式：
+
+1. **`_try_parse_amount()`** — 從 `_find_aum` 的內嵌函數重構為獨立的多幣別解析器：
+   - 支援 `$`, `€`, `£`, `¥` 符號（自動對應 USD/EUR/GBP/JPY）
+   - 支援 ISO 碼後綴/前綴（`850,000,000 EUR`, `EUR 850,000,000`）
+   - 支援歐洲縮寫（`850 M€`）
+   - 支援 12 種 ISO 貨幣碼：USD, EUR, GBP, JPY, CHF, AUD, CAD, SEK, NOK, DKK, SGD, HKD
+
+2. **`_normalize_number()` + `_detect_european_format()`** — 新增數字格式偵測：
+   - 啟發式判斷：如果逗號在最後一個句點之後（`1.234,56`），判定為歐洲格式
+   - 歐洲格式：`.` = 千位分隔符，`,` = 小數點
+   - US 格式：`,` = 千位分隔符，`.` = 小數點
+
+3. **`_find_aum()`** — 現在回傳 `(aum_mm, currency)` tuple：
+   - `_find_beginning_nav()` 同步重構（共用 `_try_parse_amount`）
+   - `load_fund_from_pdf()` 新增 `currency` 欄位（預設 "USD"）
+
+4. **Format F 測試 PDF** — Amundi European Credit Opportunities Fund：
+   - `€720,000,000` AUM，`€680,000,000` beginning NAV
+   - 1.25% mgmt fee, 12.5% incentive fee
+   - 8 個新測試案例
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**51/51 tests PASSED** (2.40 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Currency | Confidence | Method | Notes |
+|-----|---------|-----|----------|------------|--------|-------|
+| sample_lp_report.pdf | 12/12 exact ✓ | 2.66 ✓ | USD | 1.0 | table | No regression |
+| format_a (AQR factsheet) | 12/12 exact ✓ | 850.0 ✓ | USD | 0.94 | calendar_text | No regression |
+| format_b (ambiguous headers) | 12/12 exact ✓ | 450.41 ✓ | USD | 1.0 | table | No regression |
+| format_c (gross + net cols) | 12/12 exact ✓ | 1200.0 ✓ | USD | 1.0 | table | No regression |
+| format_d (calendar grid) | 12/12 exact ✓ | 3200.0 ✓ | USD | 0.94 | calendar_text | No regression |
+| format_e (parenthetical neg) | 12/12 exact ✓ | 579.09 ✓ | USD | 1.0 | table | No regression |
+| **format_f (EUR currency)** | **12/12 exact ✓** | **720.0 ✓** | **EUR** | **1.0** | **table** | **NEW — currency correctly detected** |
+
+前後比較（多幣別）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| `€720,000,000` | `aum_mm: null`（漏抓）| `aum_mm: 720.0, currency: EUR` |
+| `£850M` | `aum_mm: null` | `aum_mm: 850.0, currency: GBP` |
+| `850,000,000 EUR` | `aum_mm: null` | `aum_mm: 850.0, currency: EUR` |
+| `EUR 850,000,000` | `aum_mm: null` | `aum_mm: 850.0, currency: EUR` |
+| `850 M€` | `aum_mm: null` | `aum_mm: 850.0, currency: EUR` |
+| 歐洲數字 `1.234.567,89` | 可能誤解析 | 正確偵測為歐洲格式 |
+| `currency` 欄位 | 不存在 | 所有 PDF 都有 currency 標示 |
+
+LP 視角評估：
+- CalPERS 的 alternatives portfolio 有大量歐洲和亞洲配置
+- 之前上傳 EUR 報告 → AUM 欄位空白 → 分析師需要手動輸入
+- 現在自動偵測幣別 + 正確解析金額 → 效率和準確性同步提升
+- `currency` 欄位讓下游系統知道要用什麼匯率轉換
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**基金績效期間錯配（Performance Period Mismatch）**：
+- 目前 parser 假設 returns 是月度的，但有些 PDF 可能是週報或季報
+- 如果一份季報的 3 個數字被當成 3 個月度報酬 → 年化計算會嚴重失真
+- 偵測 reporting frequency（monthly vs quarterly vs weekly）是下一個信任關鍵
+
+或者 demo 導向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
+- **benchmark 提取** — 抓 benchmark return，讓 LP 做相對績效比較
+- **GBP/JPY 測試 PDF** — 驗證英鎊和日圓的解析路徑
