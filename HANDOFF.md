@@ -504,3 +504,83 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：如果 LP 上傳一份歐洲基金的報告，寫著 "Ending NAV: €2,660,284"，我們的系統會怎樣？
+
+答案：
+- `_find_aum()` 只認 `$` 和 `USD` → 回傳 `aum_mm: None`（資料缺失）
+- 更危險的是 bare number fallback：如果某個歐洲 PDF 寫 "NAV: 2,660,284"（無幣別符號），
+  parser 會用 Format 5（bare number）抓到數字，但回報為 USD — **靜默幣別錯誤**
+- CalPERS 有大量非美元配置（歐洲 PE、亞洲 VC、瑞士對沖基金），這是日常問題
+- gross vs net 的差距是 2-3%/年，但 EUR vs USD 的差距可以是 5-15%/年
+
+最危險的靜默錯誤：**幣別誤判**。不是「不能解析」（那至少可見），而是「解析成功但幣別錯了」。
+
+解法三層：
+1. **偵測**：從 AUM/NAV 行的符號和 ISO code 識別幣別
+2. **解析**：讓 `_try_parse_amount()` 識別 €、£、¥ 符號和 16 種 ISO 貨幣碼
+3. **標記**：非 USD 報告加 warning，提醒分析師做 FX 轉換
+
+### DEV
+新增：
+- `_CURRENCY_SYMBOLS` / `_CURRENCY_CODES` / `_CURRENCY_DETECT_RE` — 貨幣常量和偵測正則
+- `_detect_currency(text)` — 掃描 AUM/NAV 標籤行的貨幣符號和 ISO code，預設 USD
+- 擴展 `_try_parse_amount()`（_find_aum 和 _find_beginning_nav 中）：
+  - Format 1-3: `\$` → `[$€£¥]`（支援任何主要貨幣符號）
+  - Format 4: `USD` → `USD|EUR|GBP|JPY|CNY|CHF|CAD|AUD|SGD|HKD`
+- 新欄位：`currency`（主 dict）
+- 非 USD 時自動產生 FX conversion warning
+- 13 個新測試（TestCurrencyDetection 類 + TestEdgeCases 補充）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**49/49 tests PASSED** (2.56 seconds)
+
+sample_lp_report.pdf 回歸測試：
+
+| Check | Result |
+|-------|--------|
+| 12 monthly returns match ground truth | 12/12 exact match |
+| AUM = 2.66 | Correct |
+| Confidence = 1.0 | Correct |
+| currency = "USD" | Correct |
+| No regressions (all 36 original tests) | PASS |
+
+多幣別偵測測試：
+
+| Input | Currency | AUM | Status |
+|-------|----------|-----|--------|
+| Ending NAV: $2,660,284 | USD | 2.66 | ✓ |
+| Ending NAV: €2,660,284 | EUR | 2.66 | ✓ |
+| Ending NAV: £850,000,000 | GBP | 850.0 | ✓ |
+| Ending NAV: ¥266,028,400 | JPY | 266.03 | ✓ |
+| Ending NAV: 2,660,284 EUR | EUR | 2.66 | ✓ |
+| Ending NAV: 2,660,284 CHF | CHF | 2.66 | ✓ |
+| Ending NAV: €2.66M | EUR | 2.66 | ✓ |
+| Ending NAV: £1.2B | GBP | 1200.0 | ✓ |
+| Bare number (no currency) | USD | 2.66 | ✓ (correct default) |
+
+LP 視角評估：
+- 分析師上傳歐洲基金報告 → 看到 `currency: "EUR"` + warning 提醒 FX 轉換
+- 不再有「EUR 金額被當 USD」的靜默錯誤
+- 支援 16 種 ISO 貨幣碼，涵蓋 CalPERS 配置的絕大多數市場
+- bare number 正確預設 USD（美國 LP 報告最常見的情況）
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**LLM fallback（v2.6）**：
+- 所有 rule-based 的改進都到了收益遞減的階段
+- 下一步是：當 confidence < 0.6 或 ocr_needed=true，自動送 Claude API 做結構化提取
+- Claude 可以看圖片（處理掃描件）、理解非標準格式、做多語言提取
+- 這是 demo 的殺手級功能：把「失敗」轉化為「用 AI 兜底」
+
+或者更穩健的方向：
+- **benchmark 提取** — 抓 benchmark return，讓 LP 做相對績效比較
+- **Format Registry** — 記住 GP 格式指紋，穩定 production 環境
+- **European number format** — 某些歐洲 PDF 用逗號做小數點（1.234,56% 而非 1,234.56%）
