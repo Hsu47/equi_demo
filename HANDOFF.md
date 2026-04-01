@@ -504,3 +504,62 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：`raw_returns` 是一個匿名的 float 列表——LP 分析師看到 `[0.0182, 0.0054, ...]` 但完全不知道哪個數字對應哪個月。
+
+最危險的靜默錯誤：
+- 如果 PDF 的月份排列不是 Jan-Dec（如財年 Apr-Mar），我們會靜默地把 April 的數字當 January
+- `trailing_12_period` 只在 calendar_text 方法有，table 方法完全沒有期間標籤
+- 下游系統假設 index 0 = January → 遇到非曆年 PDF 全部錯位
+- 這比「解析不出來」更危險：數字全對、confidence=1.0，但月份歸屬全錯
+- CalPERS 委員會用 Q1 表現做決策，結果看到的實際上是 Q2 → 直接影響配置
+
+解法：為每個提取的回報值附上 month/year 標籤，讓數據自帶身份。
+
+### DEV
+新增/修改：
+- `_parse_month_label(cell_text)` — 從表格 cell、ISO 日期、月份名稱提取標準化標籤（"Jan 2025"）
+- `_extract_monthly_returns_from_tables()` — 同步收集 month_labels，存入 diagnostics
+- `_extract_calendar_text_format()` — 利用已知的 (year, month_idx) 生成月份標籤
+- `_extract_monthly_returns_from_text()` — 從 raw text 行解析月份標籤
+- `load_fund_from_pdf()` — 新增 `labeled_returns`（list of `{month, return}`）和 `reporting_period`
+- 5 個新測試案例（共 41 個），涵蓋 sample PDF 和 Format D 跨年 trailing-12
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+全格式測試結果：
+
+| PDF | Method | Period | Labels OK | Confidence |
+|-----|--------|--------|-----------|------------|
+| sample_lp_report.pdf | table | Jan 2025 – Dec 2025 | 12/12 ✓ | 1.0 |
+| format_a (AQR) | calendar_text | Jan 2025 – Dec 2025 | 12/12 ✓ | 0.94 |
+| format_b (ambiguous) | table | Jan 2025 – Dec 2025 | 12/12 ✓ | 1.0 |
+| format_c (gross+net) | table | Jan 2025 – Dec 2025 | 12/12 ✓ | 1.0 |
+| format_d (trailing-12) | calendar_text | May 2024 – Apr 2025 | 12/12 ✓ | 0.94 |
+
+41/41 tests PASSED (2.21s)，零 regression。
+
+LP 視角評估：
+- `labeled_returns` 讓分析師一眼看出「Jan 2025 = +1.82%, Feb 2025 = +0.54%」
+- `reporting_period` 直接可放入報告，可稽核
+- Format D 的 "May 2024 – Apr 2025" 明確標示跨年 trailing-12，不再有月份錯位風險
+- 下游系統不再需要「假設 index 0 = January」，直接讀取 month 欄位
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**LLM fallback（v2.6）**：
+- 我們現在有完整的 confidence + 月份標籤 + 41 個自動化測試
+- 當 confidence < 0.6 或 ocr_needed=true，送 Claude API 做結構化提取
+- Claude 可以「看」圖片，處理掃描件，理解非標準格式
+- 這是 demo 的殺手級功能
+
+或者：
+- **多幣別支援** — EUR/GBP/JPY 報告目前會 miss AUM
+- **benchmark 提取** — 抓 benchmark return 做相對績效比較
+- **Format Registry** — 記住 GP 格式指紋，避免每次重新偵測
