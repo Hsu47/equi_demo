@@ -435,3 +435,77 @@ LP 視角：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
 - **v2.5: Format Registry** — 記住 GP 格式指紋（production 價值高）
 - **自動化測試套件** — 把 5 種格式的驗證包成 pytest，CI 可跑
+
+---
+
+## Iteration 7 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：我們說「5 種格式全部正確」，但驗證方式是手動跑一次 sample_lp_report.pdf。
+其他 4 種格式從 Iteration 6 加入以來，**從來沒有自動化回歸保護**。
+
+更深層的問題：Format B 的 ground truth 本身就有錯誤：
+- Beginning NAV = $420M, Ending NAV = $420M（相同）
+- 但 12 個月回報複利 = +7.24%
+- Ending NAV 應該是 $450.4M
+- 這導致 NAV reconciliation 永遠失敗，confidence 被壓低到 0.79
+- **這不是 parser 的錯，是測試資料的錯** — 測試資料本身違反了會計恒等式
+
+如果測試資料不可信，我們的「QA PASS」也不可信。先修測試基礎設施。
+
+只能改一件事？建立自動化測試套件 + 修正 Format B ground truth。
+
+### DEV
+1. **修正 Format B 測試 PDF**：
+   - Ending NAV: $420,000,000 → $450,407,113（= $420M × compound(returns)）
+   - Ground truth AUM: 420.0 → 450.41
+   - Ground truth return_type: "unknown" → "net"（PDF body 寫 "stated after all applicable fees"，text classifier 正確判定為 net）
+   - 重新生成 4 份測試 PDF
+
+2. **新增 `tests/test_pdf_extraction.py`** — 62 個 pytest 測試：
+   - `TestSampleLPReport` (11 tests)：returns exact match, AUM, fees, confidence, NAV reconciliation
+   - `TestFormatA` (6 tests)：calendar_text method, AUM=$850M, fees=1.5/15
+   - `TestFormatB` (6 tests)：ambiguous headers, text-level net classification, NAV reconciliation now passes
+   - `TestFormatC` (6 tests)：gross+net columns, must pick net, fees=2/20
+   - `TestFormatD` (7 tests)：trailing-12 logic, YTD contamination guard, period label
+   - `TestStructural` (26 tests)：cross-format schema consistency, confidence range, decimal format
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+測試結果：**62/62 passed in 0.44s**
+
+| PDF | Method | Returns | AUM | Confidence | Warnings |
+|-----|--------|---------|-----|------------|----------|
+| sample_lp_report.pdf | table | 12/12 exact ✓ | 2.66 ✓ | 1.0 | 0 |
+| format_a (AQR) | calendar_text | 12/12 exact ✓ | 850.0 ✓ | 0.94 | 0 |
+| format_b (ambiguous) | table | 12/12 exact ✓ | 450.41 ✓ | 1.0 | 0 |
+| format_c (gross+net) | table | 12/12 exact ✓ | 1200.0 ✓ | 1.0 | 0 |
+| format_d (calendar) | calendar_text | 12/12 exact ✓ | 3200.0 ✓ | 0.94 | 0 |
+
+Format B 前後比較：
+
+| | 舊 (Iter 6) | 新 (Iter 7) |
+|---|-------------|-------------|
+| Ending NAV | $420M (wrong) | $450.4M (correct) |
+| NAV reconciliation | FAILED (delta 7.24%) | PASSED (delta 0.0%) |
+| Confidence | 0.79 (penalty from recon fail) | 1.0 |
+| Warnings | 1 (NAV recon failed) | 0 |
+
+LP 視角：
+- 自動化測試套件讓「正確性宣稱」有了可驗證的基礎
+- `pytest -v` 一行指令跑完所有 62 個驗證 — 每次程式碼改動都有回歸保護
+- Format B 的 ground truth 修正消除了一個會誤導開發者的假警報
+- cross-format structural tests 確保任何新格式也必須遵守輸出 schema
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**LLM fallback（v2.6）**：
+- 我們現在有完整的 confidence 機制和自動化測試套件
+- 當 confidence < 0.6 或 method=failed，應該送 Claude API 做結構化提取
+- 這是 demo 的殺手級功能：「連我們 parser 不確定的 PDF 也能處理」
+- 有了 pytest 安全網，加新功能不怕 regression
+
+或者：
+- **v2.5: Format Registry** — 記住 GP 格式指紋（production 價值高）
+- **真實 PDF 壓力測試** — 找 5-10 份真實 GP 報告，看 parser 在野外的表現
