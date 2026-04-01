@@ -322,6 +322,7 @@ def api_pdf_demo():
     }
     rel_path = _PDF_OPTIONS.get(pdf_key, _PDF_OPTIONS["sample"])
     pdf_path = os.path.join(os.path.dirname(__file__), rel_path)
+    pdf_url = "/" + rel_path  # for frontend link
 
     t0 = _time.time()
     try:
@@ -347,10 +348,12 @@ def api_pdf_demo():
             "status":        "success",
             "fund_name":     fund_raw["name"],
             "aum_mm":        fund_raw["aum_mm"],
+            "beginning_nav_mm": fund_raw.get("beginning_nav_mm"),
             "currency":      fund_raw.get("currency", "USD"),
             "mgmt_fee_pct":  fund_raw.get("mgmt_fee_pct"),
             "incentive_fee_pct": fund_raw.get("incentive_fee_pct"),
             "source_format": "pdf",
+            "pdf_url":       pdf_url,
             "extraction":    fund_raw["extraction"],
             "extract_ms":    t_extract,
             "raw_returns_preview": [round(r * 100, 2) for r in fund_raw["raw_returns"]],

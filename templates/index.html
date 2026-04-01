@@ -442,8 +442,7 @@
       <strong style="color:var(--text)">the real danger isn't "can't parse", it's "parsed wrong but looks right".</strong>
     </p>
     <p style="font-size:0.75rem;color:var(--muted);margin-bottom:16px">
-      Our parser extracts, cross-validates, and tells you how much to trust the result. Click below to see it live on a real LP statement.
-      &nbsp;·&nbsp; <a href="/static/sample_lp_report.pdf" target="_blank" style="color:var(--accent);font-size:0.75rem">view source PDF ↗</a>
+      Our parser extracts, cross-validates, and tells you how much to trust the result. Select a format below to see how it handles real-world edge cases.
     </p>
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <select id="pdf-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 12px;font-size:0.8rem;min-width:280px;cursor:pointer" onchange="updatePdfDescription()">
@@ -457,6 +456,7 @@
         <option value="format_g">Format G — European Comma Decimals (1,23%)</option>
       </select>
       <button class="pdf-btn" id="pdf-parse-btn" onclick="runPdfDemo()">▶ Parse</button>
+      <a id="pdf-view-link" href="/static/sample_lp_report.pdf" target="_blank" style="color:var(--accent);font-size:0.75rem;white-space:nowrap">view source PDF ↗</a>
     </div>
     <div id="pdf-desc" style="font-size:0.72rem;color:var(--muted);margin-top:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;line-height:1.6"></div>
 
@@ -1056,6 +1056,16 @@ fetch('/api/moat').then(r => r.json()).then(items => {
 });
 
 // ── PDF Demo ──────────────────────────────────────────────────────────────────
+const _PDF_URLS = {
+  sample:   '/static/sample_lp_report.pdf',
+  format_a: '/static/test_pdfs/format_a_aqr_factsheet.pdf',
+  format_b: '/static/test_pdfs/format_b_ambiguous_headers.pdf',
+  format_c: '/static/test_pdfs/format_c_gross_and_net.pdf',
+  format_d: '/static/test_pdfs/format_d_calendar_grid.pdf',
+  format_e: '/static/test_pdfs/format_e_parenthetical_negatives.pdf',
+  format_f: '/static/test_pdfs/format_f_eur_denominated.pdf',
+  format_g: '/static/test_pdfs/format_g_european_comma_returns.pdf',
+};
 const _PDF_DESCRIPTIONS = {
   sample: '<strong>Standard LP quarterly report</strong> — vertical month/return table, beginning + ending NAV, fee disclosure. The baseline: if this doesn\'t parse perfectly, nothing else matters.',
   format_a: '<strong>AQR-style single-page factsheet</strong> — summary performance (1M/3M/YTD/1Y) + calendar grid. Challenge: no standard table structure, pdfplumber can\'t extract the grid as a table → falls back to calendar text parser.',
@@ -1069,8 +1079,9 @@ const _PDF_DESCRIPTIONS = {
 function updatePdfDescription() {
   const key = document.getElementById('pdf-select').value;
   document.getElementById('pdf-desc').innerHTML = _PDF_DESCRIPTIONS[key] || '';
+  document.getElementById('pdf-view-link').href = _PDF_URLS[key] || _PDF_URLS.sample;
 }
-updatePdfDescription();  // show description on page load
+updatePdfDescription();
 
 function runPdfDemo() {
   const btn = document.getElementById('pdf-parse-btn');
@@ -1089,36 +1100,105 @@ function runPdfDemo() {
 
     const recColor = { RECOMMEND: '#3fb950', WATCHLIST: '#d29922', PASS: '#f85149' };
     const m = d.metrics;
+    const ex = d.extraction;
 
+    // ── Header meta ──
+    const currSym = {USD:'$',EUR:'€',GBP:'£',JPY:'¥'}[d.currency]||'$';
+    const aumStr = d.aum_mm != null ? `${currSym}${d.aum_mm}M` : 'N/A';
     document.getElementById('pdf-meta').innerHTML =
       `<span style="color:var(--green);font-weight:600">✓ ${d.fund_name}</span>`+
-      `&nbsp;·&nbsp; AUM <strong>$${d.aum_mm}M</strong>`+
-      `&nbsp;·&nbsp; method: <code style="color:var(--accent)">${d.extraction.method}</code>`+
-      `&nbsp;·&nbsp; ${d.extraction.returns_count} months extracted from ${d.extraction.pages_scanned} pages`+
-      `&nbsp;·&nbsp; <strong style="color:var(--accent)">${d.extract_ms}ms</strong>`;
+      `&nbsp;·&nbsp; AUM <strong>${aumStr}</strong>`+
+      `&nbsp;·&nbsp; method: <code style="color:var(--accent)">${ex.method}</code>`+
+      `&nbsp;·&nbsp; ${ex.returns_count} months from ${ex.pages_scanned} pages`+
+      `&nbsp;·&nbsp; <strong style="color:var(--accent)">${d.extract_ms}ms</strong>`+
+      `&nbsp;·&nbsp; <a href="${d.pdf_url}" target="_blank" style="color:var(--accent)">view source ↗</a>`;
 
     // ── Trust signals panel ──
-    const ex = d.extraction;
     const confColor = ex.confidence >= 0.9 ? 'var(--green)' : ex.confidence >= 0.7 ? 'var(--yellow)' : 'var(--red)';
-    const reconLabel = ex.reconciliation
-      ? (ex.reconciliation.reconciled ? `✓ δ=${ex.reconciliation.delta_pct}%` : `✗ δ=${ex.reconciliation.delta_pct}%`)
-      : '—';
-    const reconColor = ex.reconciliation
-      ? (ex.reconciliation.reconciled ? 'var(--green)' : 'var(--red)')
-      : 'var(--muted)';
+    const confLabel = ex.confidence >= 0.9 ? 'High trust' : ex.confidence >= 0.7 ? 'Verify recommended' : 'Manual review needed';
+
+    // Reconciliation
+    let reconHtml, reconColor;
+    if (ex.reconciliation) {
+      const r = ex.reconciliation;
+      reconColor = r.reconciled ? 'var(--green)' : 'var(--red)';
+      reconHtml = `<div class="pm-val" style="color:${reconColor};font-size:0.95rem">${r.reconciled ? '✓' : '✗'} δ=${r.delta_pct}%</div>`
+        + `<div class="pm-lbl">NAV Reconciliation</div>`
+        + `<div style="font-size:0.6rem;color:var(--muted);margin-top:4px;line-height:1.5">`
+        + `Begin: ${currSym}${r.beginning_nav_mm}M<br>`
+        + `End (stated): ${currSym}${r.ending_nav_mm}M<br>`
+        + `End (implied): ${currSym}${r.implied_nav_mm}M<br>`
+        + `<span style="color:${reconColor}">Δ = ${r.delta_pct}% ${r.reconciled ? '< 5% threshold ✓' : '≥ 5% — investigate'}</span>`
+        + `</div>`;
+    } else {
+      reconColor = 'var(--muted)';
+      reconHtml = `<div class="pm-val" style="color:var(--muted)">—</div>`
+        + `<div class="pm-lbl">NAV Reconciliation</div>`
+        + `<div style="font-size:0.6rem;color:var(--muted);margin-top:4px">No beginning NAV found — cross-check skipped</div>`;
+    }
+
+    // Return type
+    const rtColor = ex.return_type === 'net' ? 'var(--green)' : ex.return_type === 'gross' ? 'var(--red)' : 'var(--yellow)';
+    const rtExplain = {
+      net: 'After all fees — this is what the LP actually earned. Safe for allocation decisions.',
+      gross: 'Before fees — overstates LP returns. Must subtract mgmt + incentive fees before comparing.',
+      unknown: 'Column header is ambiguous. Could be net or gross — manual verification needed before use.',
+    }[ex.return_type] || 'Unknown';
+
+    // Fee structure
     const feeStr = [
-      d.extraction.fee_source ? `${d.mgmt_fee_pct ?? '?'}% mgmt` : null,
-      d.extraction.fee_source ? `${d.incentive_fee_pct ?? '?'}% perf` : null,
+      ex.fee_source ? `${d.mgmt_fee_pct ?? '?'}% mgmt` : null,
+      ex.fee_source ? `${d.incentive_fee_pct ?? '?'}% perf` : null,
     ].filter(Boolean).join(' / ') || '—';
 
-    const confLabel = ex.confidence >= 0.9 ? 'High trust' : ex.confidence >= 0.7 ? 'Verify recommended' : 'Manual review needed';
+    // Confidence breakdown
+    const cb = ex.confidence_breakdown || {};
+    const bdRows = [
+      {label:'Method',       val:cb.method,         max:0.4,  explain: ex.method==='table' ? 'Table extraction (best)' : ex.method==='calendar_text' ? 'Calendar text fallback' : 'Text scan fallback'},
+      {label:'Completeness', val:cb.completeness,    max:0.5,  explain: `${ex.returns_count}/12 months found`},
+      {label:'Warnings',     val:cb.warnings,        max:0.1,  explain: `${(ex.warnings||[]).length} warning(s) — each costs -0.10`},
+      {label:'Reconciliation',val:cb.reconciliation, max:0.05, explain: cb.reconciliation > 0 ? 'NAV cross-check passed (+0.05)' : cb.reconciliation < 0 ? 'NAV cross-check failed (−0.20)' : 'No NAV data — neutral'},
+      {label:'Return type',  val:cb.return_type,     max:0,    explain: cb.return_type < 0 ? (ex.return_type==='gross' ? 'Gross returns (−0.10)' : 'Unknown type (−0.15)') : 'Net returns — no penalty'},
+      {label:'OCR',          val:cb.ocr,             max:0,    explain: cb.ocr < 0 ? 'Scanned PDF detected — data less reliable' : 'Text-based PDF ✓'},
+    ];
+    const breakdownHtml = bdRows.map(r => {
+      const v = r.val ?? 0;
+      const color = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)';
+      const sign = v > 0 ? '+' : '';
+      return `<div style="display:flex;align-items:center;gap:8px;font-size:0.68rem;padding:2px 0">`
+        + `<span style="width:90px;color:var(--muted)">${r.label}</span>`
+        + `<span style="width:45px;text-align:right;color:${color};font-family:monospace;font-weight:600">${sign}${v.toFixed(3)}</span>`
+        + `<span style="color:var(--muted);opacity:0.8">${r.explain}</span>`
+        + `</div>`;
+    }).join('');
+
     document.getElementById('pdf-trust').innerHTML = `
-      <div class="pdf-metric"><div class="pm-val" style="color:${confColor}">${ex.confidence.toFixed(2)}</div><div class="pm-lbl">Confidence<br><span style="font-weight:400;font-size:0.6rem">${confLabel}</span></div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:${reconColor};font-size:0.95rem">${reconLabel}</div><div class="pm-lbl">NAV Reconciliation<br><span style="font-weight:400;font-size:0.6rem">begin NAV × returns ≈ end NAV?</span></div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:${ex.return_type === 'net' ? 'var(--green)' : 'var(--yellow)'}">${ex.return_type || '?'}</div><div class="pm-lbl">Return Type<br><span style="font-weight:400;font-size:0.6rem">${ex.return_type === 'net' ? 'after fees — LP standard' : 'verify with GP'}</span></div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:var(--accent)">${ex.currency || 'USD'}</div><div class="pm-lbl">Currency<br><span style="font-weight:400;font-size:0.6rem">auto-detected from document</span></div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:var(--text);font-size:0.95rem">${feeStr}</div><div class="pm-lbl">Fee Structure<br><span style="font-weight:400;font-size:0.6rem">extracted from report text</span></div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:var(--muted)">${ex.method}</div><div class="pm-lbl">Parse Method<br><span style="font-weight:400;font-size:0.6rem">${ex.returns_count}/12 months · ${d.extract_ms}ms</span></div></div>`;
+      <div class="pdf-metric">
+        <div class="pm-val" style="color:${confColor}">${ex.confidence.toFixed(2)}</div>
+        <div class="pm-lbl">Confidence Score<br><span style="font-weight:400;font-size:0.6rem">${confLabel}</span></div>
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">${breakdownHtml}</div>
+      </div>
+      <div class="pdf-metric">${reconHtml}</div>
+      <div class="pdf-metric">
+        <div class="pm-val" style="color:${rtColor}">${ex.return_type || '?'}</div>
+        <div class="pm-lbl">Return Type</div>
+        <div style="font-size:0.6rem;color:var(--muted);margin-top:4px;line-height:1.5">${rtExplain}</div>
+      </div>
+      <div class="pdf-metric">
+        <div class="pm-val" style="color:var(--accent)">${ex.currency || 'USD'}</div>
+        <div class="pm-lbl">Currency</div>
+        <div style="font-size:0.6rem;color:var(--muted);margin-top:4px">Detected via: ${ex.currency_source || 'default'}</div>
+      </div>
+      <div class="pdf-metric">
+        <div class="pm-val" style="color:var(--text);font-size:0.95rem">${feeStr}</div>
+        <div class="pm-lbl">Fee Structure</div>
+        <div style="font-size:0.6rem;color:var(--muted);margin-top:4px">${ex.fee_source ? 'Extracted from: ' + ex.fee_source + ' pattern' : 'Not found in document'}</div>
+      </div>
+      <div class="pdf-metric">
+        <div class="pm-val" style="color:var(--muted)">${ex.method}</div>
+        <div class="pm-lbl">Parse Method</div>
+        <div style="font-size:0.6rem;color:var(--muted);margin-top:4px">${ex.returns_count}/12 months · ${d.extract_ms}ms<br>Column: ${ex.return_column || 'auto'}</div>
+      </div>`;
 
     // Warnings
     const warns = ex.warnings || [];

@@ -1244,6 +1244,14 @@ def load_fund_from_pdf(path: str) -> dict:
             + return_type_adj + ocr_adj)),
         3
     )
+    confidence_breakdown = {
+        "method":          round(method_score * 0.4, 3),
+        "completeness":    round(completeness_score * 0.5, 3),
+        "warnings":        round((1.0 - warning_penalty) * 0.1, 3),
+        "reconciliation":  round(reconciliation_adj, 3),
+        "return_type":     round(return_type_adj, 3),
+        "ocr":             round(ocr_adj, 3),
+    }
 
     return {
         "fund_id":           ticker,
@@ -1267,6 +1275,7 @@ def load_fund_from_pdf(path: str) -> dict:
             "method":           method,
             "returns_count":    len(returns),
             "confidence":       confidence,
+            "confidence_breakdown": confidence_breakdown,
             "return_column":    diagnostics.get("return_column", "unknown"),
             "return_type":      return_type,
             "currency":         currency_info["currency"],
