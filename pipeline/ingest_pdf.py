@@ -42,6 +42,18 @@ _BEGINNING_NAV_LABELS = ("beginning nav", "beginning capital", "beginning balanc
                           "beg. nav", "beg nav", "start nav")
 _PERIOD_LABELS       = ("reporting period", "period:", "for the period")
 
+# ── Multi-currency support ───────────────────────────────────────────────────
+_CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY"}
+_CURRENCY_CODES = {
+    "USD", "EUR", "GBP", "JPY", "CNY", "CHF", "CAD", "AUD",
+    "SGD", "HKD", "SEK", "NOK", "DKK", "NZD", "KRW", "BRL",
+}
+# Regex: currency symbol or code near a number on AUM-related lines
+_CURRENCY_DETECT_RE = re.compile(
+    r'([$€£¥])|(?<!\w)(USD|EUR|GBP|JPY|CNY|CHF|CAD|AUD|SGD|HKD|SEK|NOK|DKK|NZD|KRW|BRL)(?!\w)',
+    re.IGNORECASE,
+)
+
 # Expanded header detection — covers most LP report variants
 _RETURN_HEADER_KEYWORDS = {
     "net return", "monthly return", "performance", "return (%)",
@@ -156,6 +168,37 @@ def _derive_ticker(fund_name: str, file_path: str) -> str:
     return os.path.splitext(os.path.basename(file_path))[0].upper()[:8]
 
 
+def _detect_currency(text: str) -> str:
+    """
+    Detect the primary currency used in AUM/NAV-related lines.
+
+    Scans lines containing AUM or NAV labels for currency symbols ($, €, £, ¥)
+    or ISO codes (USD, EUR, GBP, etc.). Returns the detected currency code.
+    Falls back to "USD" if no explicit currency indicator is found (most LP reports).
+    """
+    lines = text.splitlines()
+    all_labels = _AUM_LABELS + _BEGINNING_NAV_LABELS
+
+    for i, line in enumerate(lines):
+        line_l = line.lower()
+        if not any(lbl in line_l for lbl in all_labels):
+            continue
+        # Check current line and next line for currency indicators
+        search_lines = [line]
+        if i + 1 < len(lines):
+            search_lines.append(lines[i + 1])
+        for sl in search_lines:
+            m = _CURRENCY_DETECT_RE.search(sl)
+            if m:
+                symbol = m.group(1)
+                code = m.group(2)
+                if symbol:
+                    return _CURRENCY_SYMBOLS[symbol]
+                if code:
+                    return code.upper()
+    return "USD"
+
+
 def _find_aum(text: str):
     """
     Extract ending NAV / AUM from text.
@@ -171,22 +214,23 @@ def _find_aum(text: str):
 
     def _try_parse_amount(search_text):
         """Try multiple AUM formats on a text string. Returns value in millions or None."""
-        # Format 1: $X.XXM / $X.XX million
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
+        _sym = r"[$€£¥]"  # any currency symbol
+        # Format 1: €X.XXM / £X.XX million (any currency symbol)
+        m = re.search(_sym + r"([\d,.]+)\s*[Mm](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")), 2)
             except ValueError:
                 pass
-        # Format 2: $X.XXB / $X.XX billion
-        m = re.search(r"\$([\d,.]+)\s*[Bb](?:illion)?", search_text)
+        # Format 2: $X.XXB / €X.XX billion (any currency symbol)
+        m = re.search(_sym + r"([\d,.]+)\s*[Bb](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")) * 1000, 2)
             except ValueError:
                 pass
-        # Format 3: $X,XXX,XXX.XX (standard dollar amount)
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
+        # Format 3: €X,XXX,XXX.XX (standard amount with any currency symbol)
+        m = re.search(_sym + r"([\d,]+(?:\.\d{1,2})?)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -194,8 +238,8 @@ def _find_aum(text: str):
                     return round(val / 1_000_000, 2)
             except ValueError:
                 pass
-        # Format 4: X,XXX,XXX USD
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
+        # Format 4: X,XXX,XXX USD/EUR/GBP/JPY/CHF/etc.
+        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:USD|EUR|GBP|JPY|CNY|CHF|CAD|AUD|SGD|HKD)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -244,13 +288,14 @@ def _find_beginning_nav(text: str):
     lines = text.splitlines()
 
     def _try_parse_amount(search_text):
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
+        _sym = r"[$€£¥]"
+        m = re.search(_sym + r"([\d,.]+)\s*[Mm](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")), 2)
             except ValueError:
                 pass
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
+        m = re.search(_sym + r"([\d,]+(?:\.\d{1,2})?)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -258,7 +303,7 @@ def _find_beginning_nav(text: str):
                     return round(val / 1_000_000, 2)
             except ValueError:
                 pass
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
+        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:USD|EUR|GBP|JPY|CNY|CHF|CAD|AUD|SGD|HKD)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -940,8 +985,9 @@ def load_fund_from_pdf(path: str) -> dict:
         {
             "ticker":           str,
             "name":             str,
-            "aum_mm":           float | None,   # ending NAV in millions
-            "beginning_nav_mm": float | None,   # beginning NAV in millions
+            "aum_mm":           float | None,   # ending NAV in millions (in detected currency)
+            "beginning_nav_mm": float | None,   # beginning NAV in millions (in detected currency)
+            "currency":         str,            # ISO currency code (e.g. "USD", "EUR", "GBP")
             "raw_returns":      list[float],    # monthly returns as decimals
             "source_format":    "pdf",
             "source_path":      str,
@@ -977,6 +1023,7 @@ def load_fund_from_pdf(path: str) -> dict:
     fund_name       = _find_fund_name(text)
     aum_mm          = _find_aum(text)
     beginning_nav_mm = _find_beginning_nav(text)
+    currency        = _detect_currency(text)
     ticker          = _derive_ticker(fund_name, path)
     fees            = _extract_fees(text)
 
@@ -1050,6 +1097,13 @@ def load_fund_from_pdf(path: str) -> dict:
                 f"vs stated {aum_mm}M (delta {reconciliation['delta_pct']}%)"
             )
 
+    # ── Currency warning ──────────────────────────────────────────────────────
+    if currency != "USD":
+        warnings.append(
+            f"Amounts are in {currency} (not USD). AUM and NAV values are in {currency} millions. "
+            f"Apply FX conversion before cross-fund comparison."
+        )
+
     # ── OCR quality warning ─────────────────────────────────────────────────
     if ocr_info["ocr_needed"]:
         warnings.append(
@@ -1098,6 +1152,7 @@ def load_fund_from_pdf(path: str) -> dict:
         "name":              fund_name,
         "aum_mm":            aum_mm,
         "beginning_nav_mm":  beginning_nav_mm,
+        "currency":          currency,
         "mgmt_fee_pct":      fees["mgmt_fee_pct"],
         "incentive_fee_pct": fees["incentive_fee_pct"],
         "raw_returns":       returns,

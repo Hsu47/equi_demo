@@ -7,7 +7,7 @@ Run: pytest tests/test_pdf_extraction.py -v
 import os
 import json
 import pytest
-from pipeline.ingest_pdf import load_fund_from_pdf
+from pipeline.ingest_pdf import load_fund_from_pdf, _detect_currency, _find_aum
 from pipeline.generate_test_pdfs import GROUND_TRUTH, GT_MONTHLY, GT_TRAILING_12
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -245,3 +245,50 @@ class TestEdgeCases:
                      "warnings", "ocr_needed"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"
+
+    def test_currency_field_present(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        assert "currency" in result, "Missing currency field"
+        assert result["currency"] == "USD"
+
+
+# ── Multi-currency unit tests ──────────────────────────────────────────────
+
+class TestCurrencyDetection:
+    """Unit tests for multi-currency detection and AUM parsing."""
+
+    def test_usd_symbol(self):
+        assert _detect_currency("Ending NAV: $2,660,284") == "USD"
+
+    def test_eur_symbol(self):
+        assert _detect_currency("Ending NAV: €2,660,284") == "EUR"
+
+    def test_gbp_symbol(self):
+        assert _detect_currency("Ending NAV: £2,660,284") == "GBP"
+
+    def test_jpy_symbol(self):
+        assert _detect_currency("Ending NAV: ¥266,028,400") == "JPY"
+
+    def test_eur_code(self):
+        assert _detect_currency("Ending NAV: 2,660,284 EUR") == "EUR"
+
+    def test_chf_code(self):
+        assert _detect_currency("Ending NAV: 2,660,284 CHF") == "CHF"
+
+    def test_bare_number_defaults_usd(self):
+        assert _detect_currency("Ending NAV: 2,660,284") == "USD"
+
+    def test_aum_eur_symbol(self):
+        assert _find_aum("Ending NAV €2,660,284.00") == 2.66
+
+    def test_aum_gbp_symbol(self):
+        assert _find_aum("Fund Assets: £850,000,000") == 850.0
+
+    def test_aum_eur_code(self):
+        assert _find_aum("Total NAV: 2,660,284 EUR") == 2.66
+
+    def test_aum_eur_abbreviated(self):
+        assert _find_aum("Ending NAV: €2.66M") == 2.66
+
+    def test_aum_gbp_billion(self):
+        assert _find_aum("Ending NAV: £1.2B") == 1200.0
