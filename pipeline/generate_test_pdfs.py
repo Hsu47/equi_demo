@@ -10,6 +10,7 @@ Formats covered:
      with partial current year (tests trailing-12 logic)
   E. Parenthetical negatives (US GAAP): (0.91)% instead of -0.91%
   F. EUR-denominated European fund: € symbol, EUR currency, explicit currency statement
+  G. European comma decimal returns: 1,23% instead of 1.23% (continental Europe)
 """
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -70,6 +71,15 @@ GROUND_TRUTH = {
         "beginning_nav_mm": 676.06,
         "currency": "EUR",
         "return_type": "net",
+    },
+    "format_g_european_comma_returns.pdf": {
+        "monthly_returns": GT_MONTHLY,
+        "aum_mm": 380.43,
+        "beginning_nav_mm": 354.75,
+        "currency": "EUR",
+        "return_type": "net",
+        "mgmt_fee_pct": 1.5,
+        "incentive_fee_pct": 18.0,
     },
 }
 
@@ -470,6 +480,79 @@ def build_format_f():
     print(f"  \u2713 Format F (EUR denominated): {path}")
 
 
+def build_format_g():
+    """
+    European comma decimal returns: 1,23% instead of 1.23%.
+    Continental European GPs (Germany, France, Netherlands) commonly use
+    comma as decimal separator in return percentages.
+    Tests both table cells and parenthetical negatives with commas.
+    """
+    path = os.path.join(OUTPUT_DIR, "format_g_european_comma_returns.pdf")
+    doc = SimpleDocTemplate(path, pagesize=letter,
+                            rightMargin=0.6*inch, leftMargin=0.6*inch,
+                            topMargin=0.6*inch, bottomMargin=0.5*inch)
+    st = _styles()
+    story = []
+
+    story.append(Paragraph("Deutsche Kredit Strategien Fonds LP", st["title"]))
+    story.append(Paragraph("Investorenbericht — Dezember 2025", st["sub"]))
+    story.append(Paragraph("Verwaltet von Berenberg Capital Management (Hamburg)", st["sub"]))
+    story.append(Spacer(1, 0.15*inch))
+
+    # Fund overview
+    story.append(Paragraph("Fonds\u00fcbersicht", st["section"]))
+
+    # Use computed ending NAV for consistency
+    beginning_nav = 354_750_000
+    compound = 1.0
+    for r in GT_MONTHLY:
+        compound *= (1 + r / 100)
+    ending_nav = round(beginning_nav * compound)
+
+    overview = [
+        ["Fund Currency:", "EUR"],
+        ["Beginning NAV (Jan 1, 2025):", f"\u20ac{beginning_nav:,.0f}"],
+        ["Net Assets (Ending NAV):", f"\u20ac{ending_nav:,.0f}"],
+        ["Strategie:", "European Credit Long/Short"],
+        ["Auflegung:", "M\u00e4rz 2019"],
+    ]
+    t = Table(overview, colWidths=[2.5*inch, 3.5*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Monthly returns with EUROPEAN COMMA DECIMALS — this is the key format
+    story.append(Paragraph("Monatliche Netto-Rendite (%)", st["section"]))
+    header = ["Monat", "Net Return (%)"]
+    rows = [header]
+    for i, r in enumerate(GT_MONTHLY):
+        month_name = f"{GT_MONTHS[i]} 2025"
+        # European format: comma as decimal separator
+        # Negative values use parenthetical format with comma: (0,45)%
+        if r < 0:
+            ret_str = f"({abs(r):.2f})%".replace(".", ",")
+        else:
+            ret_str = f"{r:.2f}%".replace(".", ",")
+        rows.append([month_name, ret_str])
+    t = Table(rows, colWidths=[2.5*inch, 2*inch])
+    t.setStyle(_table_style_basic())
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph(
+        "All amounts are denominated in EUR. Fund Currency: EUR. "
+        "Returns are net of management fees (1.50% p.a.) and "
+        "performance fees (18%). Net of fees. "
+        "Report prepared in accordance with BaFin regulations.",
+        st["disc"]))
+    doc.build(story)
+    print(f"  \u2713 Format G (European comma returns): {path}")
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating test PDFs...")
@@ -479,6 +562,7 @@ def main():
     build_format_d()
     build_format_e()
     build_format_f()
+    build_format_g()
     print(f"\nGround truth for validation:")
     for name, gt in GROUND_TRUTH.items():
         print(f"  {name}: {len(gt['monthly_returns'])} months, AUM={gt.get('aum_mm')}")

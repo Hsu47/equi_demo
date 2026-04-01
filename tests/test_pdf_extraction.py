@@ -323,6 +323,57 @@ class TestFormatF:
         assert self.ext["confidence"] == 1.0
 
 
+class TestFormatG:
+    """Format G: European comma decimal returns — 1,23% instead of 1.23%."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, ensure_test_pdfs):
+        self.gt = GROUND_TRUTH["format_g_european_comma_returns.pdf"]
+        self.result = _load_test_pdf("format_g_european_comma_returns.pdf")
+        self.ext = self.result["extraction"]
+
+    def test_returns_exact_match(self):
+        """European comma decimals must be correctly parsed to float values."""
+        expected = [r / 100 for r in self.gt["monthly_returns"]]
+        actual = self.result["raw_returns"]
+        assert len(actual) == 12, f"Expected 12 months, got {len(actual)}"
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            assert abs(a - e) < 1e-6, f"Month {i+1}: {a} != {e}"
+
+    def test_negative_returns_are_negative(self):
+        """Parenthetical negatives with comma: (0,45)% must be negative."""
+        negative_indices = [i for i, r in enumerate(self.gt["monthly_returns"]) if r < 0]
+        assert len(negative_indices) >= 3, "Ground truth should have multiple negative months"
+        for i in negative_indices:
+            assert self.result["raw_returns"][i] < 0, (
+                f"Month {i+1} should be negative but got {self.result['raw_returns'][i]}"
+            )
+
+    def test_aum(self):
+        assert self.result["aum_mm"] == self.gt["aum_mm"]
+
+    def test_beginning_nav(self):
+        assert self.result["beginning_nav_mm"] == self.gt["beginning_nav_mm"]
+
+    def test_currency_is_eur(self):
+        assert self.result["currency"] == "EUR"
+
+    def test_return_type(self):
+        assert self.ext["return_type"] == "net"
+
+    def test_nav_reconciliation(self):
+        """NAV reconciliation should pass with correctly parsed European returns."""
+        rec = self.ext["reconciliation"]
+        assert rec is not None, "Reconciliation should not be None"
+        assert rec["reconciled"], f"NAV reconciliation failed: delta {rec['delta_pct']}%"
+
+    def test_confidence(self):
+        assert self.ext["confidence"] >= 0.90
+
+    def test_method(self):
+        assert self.ext["method"] == "table"
+
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 class TestEdgeCases:
