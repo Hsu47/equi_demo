@@ -8,6 +8,8 @@ Formats covered:
   C. Gross + Net side by side: two return columns, parser must pick net
   D. Multi-year calendar grid (Winton-style): rows=years, cols=months
      with partial current year (tests trailing-12 logic)
+  E. Parenthetical negatives (US GAAP): (0.91)% instead of -0.91%
+  F. EUR-denominated European fund: € symbol, EUR currency, explicit currency statement
 """
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -60,6 +62,12 @@ GROUND_TRUTH = {
         "monthly_returns": GT_MONTHLY,  # same returns, but negatives use (X.XX) format
         "aum_mm": 579.09,  # ending NAV (beginning $540M * compound returns)
         "beginning_nav_mm": 540.0,
+        "return_type": "net",
+    },
+    "format_f_eur_denominated.pdf": {
+        "monthly_returns": GT_MONTHLY,
+        "aum_mm": 725.0,
+        "currency": "EUR",
         "return_type": "net",
     },
 }
@@ -401,6 +409,65 @@ def build_format_e():
     print(f"  ✓ Format E (parenthetical negatives): {path}")
 
 
+def build_format_f():
+    """
+    EUR-denominated European fund LP report.
+    Tests:
+    - € symbol in AUM / NAV fields
+    - Explicit "Fund Currency: EUR" statement
+    - Currency detection pipeline
+    """
+    path = os.path.join(OUTPUT_DIR, "format_f_eur_denominated.pdf")
+    doc = SimpleDocTemplate(path, pagesize=letter,
+                            rightMargin=0.6*inch, leftMargin=0.6*inch,
+                            topMargin=0.6*inch, bottomMargin=0.5*inch)
+    st = _styles()
+    story = []
+
+    story.append(Paragraph("Europaische Kredit Strategien Fund LP", st["title"]))
+    story.append(Paragraph("Investor Report — December 2025", st["sub"]))
+    story.append(Paragraph("Administered by Citco Fund Services (Luxembourg)", st["sub"]))
+    story.append(Spacer(1, 0.15*inch))
+
+    # Fund overview with EUR currency
+    story.append(Paragraph("Fund Overview", st["section"]))
+    overview = [
+        ["Fund Currency:", "EUR"],
+        ["Net Assets (Ending NAV):", "\u20ac725,000,000"],
+        ["Strategy:", "European Credit Long/Short"],
+        ["Inception:", "March 2018"],
+    ]
+    t = Table(overview, colWidths=[2.5*inch, 3.5*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Monthly returns table
+    story.append(Paragraph("Monthly Net Return (%)", st["section"]))
+    header = ["Month", "Net Return (%)"]
+    rows = [header]
+    for i, r in enumerate(GT_MONTHLY):
+        month_name = f"{GT_MONTHS[i]} 2025"
+        ret_str = f"{r:+.2f}%"
+        rows.append([month_name, ret_str])
+    t = Table(rows, colWidths=[2.5*inch, 2*inch])
+    t.setStyle(_table_style_basic())
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph(
+        "All figures are denominated in EUR. "
+        "Returns are net of management fees (1.25% p.a.) and performance fees (15%). "
+        "This report is prepared in accordance with Luxembourg CSSF regulations.",
+        st["disc"]))
+    doc.build(story)
+    print(f"  \u2713 Format F (EUR denominated): {path}")
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating test PDFs...")
@@ -409,6 +476,7 @@ def main():
     build_format_c()
     build_format_d()
     build_format_e()
+    build_format_f()
     print(f"\nGround truth for validation:")
     for name, gt in GROUND_TRUTH.items():
         print(f"  {name}: {len(gt['monthly_returns'])} months, AUM={gt.get('aum_mm')}")

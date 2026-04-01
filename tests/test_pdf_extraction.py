@@ -260,6 +260,55 @@ class TestFormatE:
         assert self.result["incentive_fee_pct"] == 15.0
 
 
+class TestFormatF:
+    """Format F: EUR-denominated European fund — currency detection."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, ensure_test_pdfs):
+        self.gt = GROUND_TRUTH["format_f_eur_denominated.pdf"]
+        self.result = _load_test_pdf("format_f_eur_denominated.pdf")
+        self.ext = self.result["extraction"]
+
+    def test_returns_exact_match(self):
+        expected = [r / 100 for r in self.gt["monthly_returns"]]
+        actual = self.result["raw_returns"]
+        assert len(actual) == 12
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            assert abs(a - e) < 1e-6, f"Month {i+1}: {a} != {e}"
+
+    def test_aum(self):
+        assert self.result["aum_mm"] == self.gt["aum_mm"]
+
+    def test_currency_is_eur(self):
+        """Critical: must detect EUR, not default to USD."""
+        assert self.result["currency"] == "EUR"
+        assert self.ext["currency"] == "EUR"
+
+    def test_currency_source(self):
+        """Currency should be detected from explicit statement."""
+        assert self.ext["currency_source"] == "explicit"
+
+    def test_currency_warning(self):
+        """Non-USD currency should produce a warning for LP analysts."""
+        warnings = self.ext["warnings"]
+        assert any("EUR" in w for w in warnings)
+        assert any("Non-USD" in w for w in warnings)
+
+    def test_return_type(self):
+        assert self.ext["return_type"] == "net"
+
+    def test_fees(self):
+        assert self.result["mgmt_fee_pct"] == 1.25
+        assert self.result["incentive_fee_pct"] == 15.0
+
+    def test_confidence(self):
+        """Confidence should be high despite non-USD (data is complete and reliable)."""
+        assert self.ext["confidence"] >= 0.90
+
+    def test_method(self):
+        assert self.ext["method"] == "table"
+
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 class TestEdgeCases:
@@ -280,7 +329,7 @@ class TestEdgeCases:
     def test_required_fields_present(self):
         result = load_fund_from_pdf(SAMPLE_PDF)
         required = ["fund_id", "ticker", "name", "aum_mm", "raw_returns",
-                     "source_format", "source_path", "extraction"]
+                     "source_format", "source_path", "extraction", "currency"]
         for field in required:
             assert field in result, f"Missing required field: {field}"
 
@@ -288,6 +337,6 @@ class TestEdgeCases:
         result = load_fund_from_pdf(SAMPLE_PDF)
         ext = result["extraction"]
         required = ["method", "confidence", "returns_count", "return_type",
-                     "warnings", "ocr_needed"]
+                     "warnings", "ocr_needed", "currency", "currency_source"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"

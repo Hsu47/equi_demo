@@ -42,6 +42,83 @@ _DATE_PATTERN = re.compile(
     r"|(\d{1,2})/(\d{4})"     # 01/2025
 )
 
+# ── Currency detection ────────────────────────────────────────────────────────
+_CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY"}
+_CURRENCY_CODES = {"USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "SGD", "HKD", "CNY", "KRW", "SEK", "NOK", "DKK"}
+
+# European decimal format: 1.234.567,89 (periods = thousands, comma = decimal)
+_EUROPEAN_NUMBER_PATTERN = re.compile(r"(\d{1,3}(?:\.\d{3})+),(\d{1,2})")
+
+
+def _detect_currency(text: str) -> dict:
+    """
+    Detect the reporting currency of an LP report.
+
+    Scans for:
+      1. Explicit statements: "denominated in EUR", "reporting currency: GBP"
+      2. Currency symbols/codes near AUM labels
+      3. Most frequent currency symbol in the document
+
+    Returns:
+        {
+            "currency":        str,    # ISO code: "USD", "EUR", etc.
+            "currency_source": str,    # "explicit" | "aum_context" | "symbol_frequency" | "default"
+        }
+    """
+    text_l = text.lower()
+    lines = text.splitlines()
+
+    # Signal 1: Explicit currency statement (highest confidence)
+    explicit_patterns = [
+        re.compile(r"(?:denominated|reported|reporting\s+currency|base\s+currency|fund\s+currency)\s*(?:in|:)\s*(\w{3})", re.IGNORECASE),
+        re.compile(r"(?:all\s+(?:amounts|figures|values)\s+(?:are\s+)?in)\s+(\w{3})", re.IGNORECASE),
+        re.compile(r"currency\s*:\s*(\w{3})", re.IGNORECASE),
+    ]
+    for pat in explicit_patterns:
+        m = pat.search(text)
+        if m:
+            code = m.group(1).upper()
+            if code in _CURRENCY_CODES:
+                return {"currency": code, "currency_source": "explicit"}
+
+    # Signal 2: Currency near AUM labels
+    for line in lines:
+        line_l = line.lower()
+        if any(lbl in line_l for lbl in _AUM_LABELS):
+            # Check for currency symbols
+            for sym, code in _CURRENCY_SYMBOLS.items():
+                if sym in line:
+                    return {"currency": code, "currency_source": "aum_context"}
+            # Check for ISO codes
+            for code in _CURRENCY_CODES:
+                if re.search(r'\b' + code + r'\b', line):
+                    return {"currency": code, "currency_source": "aum_context"}
+
+    # Signal 3: Most frequent currency symbol in document
+    symbol_counts = {}
+    for sym, code in _CURRENCY_SYMBOLS.items():
+        count = text.count(sym)
+        if count > 0:
+            symbol_counts[code] = count
+
+    if symbol_counts:
+        dominant = max(symbol_counts, key=symbol_counts.get)
+        return {"currency": dominant, "currency_source": "symbol_frequency"}
+
+    # Default: USD (most common in LP reports)
+    return {"currency": "USD", "currency_source": "default"}
+
+
+def _parse_european_number(text: str) -> float:
+    """Convert European-format number to float: 1.234.567,89 → 1234567.89"""
+    m = _EUROPEAN_NUMBER_PATTERN.search(text)
+    if m:
+        integer_part = m.group(1).replace(".", "")  # remove thousands separators
+        decimal_part = m.group(2)
+        return float(f"{integer_part}.{decimal_part}")
+    return None
+
+
 _FUND_NAME_LABELS    = ("fund name", "fund:", "managed by", "fund lp", "capital fund", "macro fund")
 _AUM_LABELS          = ("ending nav", "ending capital", "total nav", "fund aum",
                         "fund assets", "total assets", "net assets", "fund size")
@@ -168,33 +245,42 @@ def _find_aum(text: str):
     """
     Extract ending NAV / AUM from text.
     Handles:
-      - "$2,660,284.00"  (standard)
-      - "$2.66M" / "$2.66 million"  (abbreviated)
-      - "$2.66B" / "$2.66 billion"  (abbreviated)
-      - "2,660,284 USD"  (no $ prefix, USD suffix)
+      - "$2,660,284.00" / "€2,660,284.00" / "£2,660,284.00"  (symbol prefix)
+      - "$2.66M" / "€2.66M" / "$2.66 million"  (abbreviated)
+      - "$2.66B" / "€2.66B" / "$2.66 billion"  (abbreviated)
+      - "2,660,284 USD" / "2,660,284 EUR"  (ISO code suffix)
       - "NAV: 2,660,284"  (bare number on same or next line)
+      - "2.660.284,00" (European decimal format)
       - Line-continuation where $ amount is on the next line
     """
     lines = text.splitlines()
+    # Match any common currency symbol: $ € £ ¥
+    _SYM = r"[\$€£¥]"
+    # Match any ISO currency code
+    _ISO_CODES = "|".join(_CURRENCY_CODES)
 
     def _try_parse_amount(search_text):
         """Try multiple AUM formats on a text string. Returns value in millions or None."""
-        # Format 1: $X.XXM / $X.XX million
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
+        # Format 0: European decimal format near AUM label: 2.660.284,00
+        eu_val = _parse_european_number(search_text)
+        if eu_val is not None and eu_val > 100_000:
+            return round(eu_val / 1_000_000, 2)
+        # Format 1: [symbol]X.XXM / [symbol]X.XX million
+        m = re.search(_SYM + r"([\d,.]+)\s*[Mm](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")), 2)
             except ValueError:
                 pass
-        # Format 2: $X.XXB / $X.XX billion
-        m = re.search(r"\$([\d,.]+)\s*[Bb](?:illion)?", search_text)
+        # Format 2: [symbol]X.XXB / [symbol]X.XX billion
+        m = re.search(_SYM + r"([\d,.]+)\s*[Bb](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")) * 1000, 2)
             except ValueError:
                 pass
-        # Format 3: $X,XXX,XXX.XX (standard dollar amount)
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
+        # Format 3: [symbol]X,XXX,XXX.XX (standard format with currency symbol)
+        m = re.search(_SYM + r"([\d,]+(?:\.\d{1,2})?)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -202,8 +288,8 @@ def _find_aum(text: str):
                     return round(val / 1_000_000, 2)
             except ValueError:
                 pass
-        # Format 4: X,XXX,XXX USD
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
+        # Format 4: X,XXX,XXX [ISO_CODE] (e.g. "2,660,284 EUR")
+        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:" + _ISO_CODES + r")\b", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -234,8 +320,8 @@ def _find_aum(text: str):
                 result = _try_parse_amount(lines[i + 1])
                 if result is not None:
                     return result
-            # Try: label line ends with $ and amount is at start of next line
-            if line.rstrip().endswith("$") and i + 1 < len(lines):
+            # Try: label line ends with currency symbol and amount is at start of next line
+            if any(line.rstrip().endswith(sym) for sym in _CURRENCY_SYMBOLS) and i + 1 < len(lines):
                 m = re.search(r"^([\d,]+(?:\.\d{2})?)", lines[i + 1].strip())
                 if m:
                     try:
@@ -325,10 +411,10 @@ def _extract_fees(text: str) -> dict:
     _incentive_patterns = [
         # "Incentive Allocation (10%)" or "Incentive Fee (20%)" or "Incentive Fee: 15%"
         re.compile(r"incentive\s+(?:allocation|fee)\s*:?\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
-        # "Performance Fee: 20%"
-        re.compile(r"performance\s+fee\s*:?\s*(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
+        # "Performance Fee: 20%" or "Performance Fees (15%)"
+        re.compile(r"performance\s+fees?\s*:?\s*\(?(\d{1,2}(?:\.\d{1,2})?)\s*%", re.IGNORECASE),
         # "20% incentive" or "20% performance fee"
-        re.compile(r"(\d{1,2}(?:\.\d{1,2})?)\s*%\s*(?:incentive|performance\s+fee)", re.IGNORECASE),
+        re.compile(r"(\d{1,2}(?:\.\d{1,2})?)\s*%\s*(?:incentive|performance\s+fees?)", re.IGNORECASE),
     ]
 
     full_text = text.lower()
@@ -1000,6 +1086,7 @@ def load_fund_from_pdf(path: str) -> dict:
     beginning_nav_mm = _find_beginning_nav(text)
     ticker          = _derive_ticker(fund_name, path)
     fees            = _extract_fees(text)
+    currency_info   = _detect_currency(text)
 
     diagnostics = {}
 
@@ -1071,6 +1158,14 @@ def load_fund_from_pdf(path: str) -> dict:
                 f"vs stated {aum_mm}M (delta {reconciliation['delta_pct']}%)"
             )
 
+    # ── Currency warning ──────────────────────────────────────────────────────
+    if currency_info["currency"] != "USD":
+        warnings.append(
+            f"Non-USD currency detected: {currency_info['currency']} "
+            f"(source: {currency_info['currency_source']}). "
+            f"AUM is reported in {currency_info['currency']} — convert to USD for cross-fund comparison."
+        )
+
     # ── OCR quality warning ─────────────────────────────────────────────────
     if ocr_info["ocr_needed"]:
         warnings.append(
@@ -1119,6 +1214,7 @@ def load_fund_from_pdf(path: str) -> dict:
         "name":              fund_name,
         "aum_mm":            aum_mm,
         "beginning_nav_mm":  beginning_nav_mm,
+        "currency":          currency_info["currency"],
         "mgmt_fee_pct":      fees["mgmt_fee_pct"],
         "incentive_fee_pct": fees["incentive_fee_pct"],
         "raw_returns":       returns,
@@ -1136,6 +1232,8 @@ def load_fund_from_pdf(path: str) -> dict:
             "confidence":       confidence,
             "return_column":    diagnostics.get("return_column", "unknown"),
             "return_type":      return_type,
+            "currency":         currency_info["currency"],
+            "currency_source":  currency_info["currency_source"],
             "fee_source":       fees["fee_source"],
             "calendar_year":         diagnostics.get("calendar_text_year_used"),
             "trailing_12_period":    diagnostics.get("calendar_text_trailing_12_period"),
