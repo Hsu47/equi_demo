@@ -667,6 +667,90 @@ LP 視角評估：
 - 如果部分 return 被跳過 → 只剩 6-8 個月 → confidence 下降但不夠低
 - 需要在 `_normalize_cell()` 和 `_RETURN_PATTERN` 中加入逗號小數偵測
 
+---
+
+## Iteration 10 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：LP 的信任建立在交叉驗證上。如果 parser 說 confidence=0.99，但其實少了一層安全網（NAV reconciliation），這個 0.99 就是虛假的信心。
+
+靜默失敗模式分析：
+1. **`_find_beginning_nav()` 只支援 $ 和 USD** → EUR/GBP/JPY 基金的 beginning NAV = None
+2. **beginning NAV = None → reconciliation 被跳過** → 沒有 NAV 交叉驗證
+3. **沒有 reconciliation → 失去「returns 和 NAV 是否一致」的安全檢查**
+4. **confidence 仍然 0.99（看起來很高）** → LP 以為數據很可靠，但實際上少了一層防線
+5. **如果 return 從錯誤的 column 提取（例如 gross 而非 net），reconciliation 本來可以抓到，但被跳過了**
+
+這是「safety net 被靜默移除」的情境 — 比數據錯誤更危險，因為連發現錯誤的機制都不在了。
+
+**決策：修復 `_find_beginning_nav` 多幣別對齊 + EUR 基金 reconciliation 完整化**
+
+### DEV
+1. **`_find_beginning_nav()` 完整重寫**：
+   - 原本只支援 `$` 和 `USD`（6 行簡單 regex）
+   - 新版完整鏡像 `_find_aum()` 的 6 層解析策略：
+     - Format 0: 歐洲小數格式（`676.055.043,00`）
+     - Format 1: 縮寫 + 任意貨幣符號（`€676M`）
+     - Format 2: 十億縮寫（`€0.676B`）
+     - Format 3: 完整數字 + 任意貨幣符號（`€676,055,043`）
+     - Format 4: ISO code suffix（`676,055,043 EUR`）
+     - Format 5: 裸大數字（no symbol fallback）
+
+2. **EUR 測試 PDF 更新**：
+   - 新增 `Beginning NAV (Jan 1, 2025): €676,055,043` 行
+   - Ground truth 新增 `beginning_nav_mm: 676.06`
+
+3. **新增 3 個測試**：
+   - `test_beginning_nav_eur`: € 符號 beginning NAV 解析
+   - `test_nav_reconciliation_eur`: EUR 基金 reconciliation 通過
+   - `test_confidence_with_reconciliation`: reconciliation 後 confidence = 1.0
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**55/55 tests PASSED** (3.09 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Beginning NAV | Reconciled | Currency | Confidence |
+|-----|---------|-----|---------------|------------|----------|------------|
+| sample_lp_report.pdf | 12/12 ✓ | 2.66 ✓ | 2.45 ✓ | ✓ (δ=1.98%) | USD | 1.0 |
+| format_a (AQR factsheet) | 12/12 ✓ | 850.0 ✓ | — | — | USD | 0.94 |
+| format_b (ambiguous headers) | 12/12 ✓ | 450.41 ✓ | 420.0 ✓ | ✓ | USD | 1.0 |
+| format_c (gross + net cols) | 12/12 ✓ | 1200.0 ✓ | — | — | USD | 1.0 |
+| format_d (calendar grid) | 12/12 ✓ | 3200.0 ✓ | — | — | USD | 0.94 |
+| format_e (parenthetical neg) | 12/12 ✓ | 579.09 ✓ | 540.0 ✓ | ✓ | USD | 1.0 |
+| **format_f (EUR fund)** | **12/12 ✓** | **725.0 ✓** | **676.06 ✓** | **✓ (δ=0.0%)** | **EUR** | **1.0** |
+
+前後比較（EUR 基金）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| Beginning NAV | None（€ 符號無法解析） | 676.06（✓ 正確解析 €676,055,043） |
+| Reconciliation | None（被跳過） | ✓ 通過（implied 725.0 vs stated 725.0, δ=0.0%） |
+| Confidence | 0.99 | 1.0（+0.05 reconciliation bonus） |
+| 安全網 | ❌ 靜默移除 | ✓ 完整啟用 |
+
+LP 視角評估：
+- CalPERS 管理多幣別基金組合 → 現在 EUR/GBP/JPY 基金都有完整的 NAV reconciliation 安全網
+- 如果 return 被從錯誤的 column 提取，reconciliation 會抓到（implied NAV ≠ stated NAV）
+- confidence = 1.0 現在真正代表「所有驗證都通過」，而非「大部分驗證通過但有一層被靜默跳過」
+- DRY 原則：`_find_beginning_nav` 和 `_find_aum` 使用相同的解析策略，減少未來不一致的風險
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**歐洲小數格式的 return 值**：
+- 目前只修了 AUM 和 Beginning NAV 的歐洲格式
+- 如果 return 也用 `1,23%`（逗號當小數點）→ `float("1,23")` 直接 ValueError → return 被跳過
+- 部分 return 被跳過 → 只剩 6-8 個月 → confidence 下降但數字可能「剛好」看起來合理
+- 需要在 `_normalize_cell()` 和 `_RETURN_PATTERN` 中加入逗號小數偵測
+- 這會影響所有歐洲 GP 產出的報告
+
+**`_find_beginning_nav` / `_find_aum` 重複邏輯**：
+- 兩個函數現在有相同的 `_try_parse_amount` 內嵌函數 → DRY violation
+- 應該提取成共用的 `_parse_currency_amount(text)` 工具函數
+- 但這是重構，不是 correctness fix，優先級較低
+
 或者更有 demo 價值的方向：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
 - **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
