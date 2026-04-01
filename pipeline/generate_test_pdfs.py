@@ -42,8 +42,9 @@ GROUND_TRUTH = {
     },
     "format_b_ambiguous_headers.pdf": {
         "monthly_returns": GT_MONTHLY,
-        "aum_mm": 420.0,
-        "return_type": "unknown",  # parser should flag this
+        "aum_mm": 450.41,  # ending NAV = beginning $420M * compound(returns)
+        "beginning_nav_mm": 420.0,
+        "return_type": "net",  # text says "after all applicable fees" → net
     },
     "format_c_gross_and_net.pdf": {
         "monthly_returns": GT_MONTHLY,  # must pick NET, not gross
@@ -179,11 +180,16 @@ def build_format_b():
     story.append(Paragraph("Annual Performance Report — FY 2025", st["sub"]))
     story.append(Spacer(1, 0.15*inch))
 
-    # Capital account
+    # Capital account — ending NAV must be consistent with monthly returns
+    beginning_nav = 420_000_000
+    compound = 1.0
+    for r in GT_MONTHLY:
+        compound *= (1 + r / 100)
+    ending_nav = round(beginning_nav * compound)
     story.append(Paragraph("Capital Account Summary", st["section"]))
     cap = [
-        ["Beginning NAV (Jan 1, 2025)", "$420,000,000"],
-        ["Ending NAV (Dec 31, 2025)", "$420,000,000"],
+        ["Beginning NAV (Jan 1, 2025)", f"${beginning_nav:,.0f}"],
+        ["Ending NAV (Dec 31, 2025)", f"${ending_nav:,.0f}"],
     ]
     t = Table(cap, colWidths=[4*inch, 2.5*inch])
     t.setStyle(TableStyle([
