@@ -671,3 +671,82 @@ LP 視角評估：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
 - **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
 - **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較（LP 最常問的問題之一）
+
+---
+
+## Iteration 10 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：LP 拿到 12 個月度報酬數字後，下一步做什麼？
+
+答案：他們不看 12 個原始數字。LP 委員會成員看的是**年化報酬、波動率、Sharpe ratio、最大回撤**。這些是配置決策的核心指標。
+
+經過 9 輪迭代，parser 的提取和驗證能力已經很強（7 種格式、52 個測試、NAV 交叉驗證、多幣別）。但輸出仍是「原料」——12 個 decimal 數字。LP 分析師拿到這些數字後還要自己開 Excel 算統計量。
+
+**靜默錯誤角度**：如果 LP 分析師自己用簡單加總（而非複利）算年化報酬，會高估表現。系統內建正確的 CAGR 計算，反而能防止下游使用錯誤。
+
+**決策：新增 `_compute_performance_stats()` — 從原始月度報酬自動計算 LP 決策所需的關鍵統計量**
+
+這讓系統從「資料提取工具」升級為「投資分析工具」。
+
+### DEV
+新增 `_compute_performance_stats(monthly_returns)` 函數：
+- **Annualized Return (CAGR)**：`compound^(12/n) - 1`，正確的複利年化
+- **Annualized Volatility**：月度標準差 × √12
+- **Sharpe Ratio**：年化報酬 / 年化波動率（rf=0，對沖基金行業慣例）
+- **Max Drawdown**：逐月追蹤峰值到谷底的最大回撤
+- **Cumulative Return**：複利總報酬
+- **Best/Worst Month**：最佳/最差月度表現
+- **% Positive Months**：正報酬月份佔比
+- **months_count**：用了多少個月計算
+
+輸出位置：`extraction.performance_stats`
+
+新增 9 個測試（`TestPerformanceStats` class）：驗證所有統計量的合理範圍和精確值。
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**61/61 tests PASSED** (3.17 seconds)
+
+Sample PDF performance stats：
+
+| 統計量 | 值 | LP 解讀 |
+|--------|-----|---------|
+| Annualized Return | 10.72% | 良好的絕對報酬 |
+| Annualized Vol | 4.69% | 低波動率，適合配置 |
+| Sharpe Ratio | 2.29 | 優異的風險調整報酬 |
+| Max Drawdown | 1.44% | 極小的回撤 |
+| Cumulative Return | 10.72% | 12 個月複利總報酬 |
+| Best Month | 3.07% (Jul) | |
+| Worst Month | -1.44% (Jun) | |
+| % Positive Months | 75.0% | 9/12 個月正報酬 |
+
+前後比較：
+
+| | 修改前 | 修改後 |
+|---|--------|--------|
+| 輸出內容 | 12 個 raw decimal 數字 | 12 個數字 + 8 個統計量 |
+| LP 需要的額外步驟 | 開 Excel → 算 CAGR → 算 vol → 算 Sharpe | 直接看結果 |
+| 年化計算方法 | LP 可能用錯（簡單加總 vs 複利） | 系統保證正確（CAGR） |
+| Demo 說服力 | 「我們能抓數字」 | 「我們能直接給你投資分析」 |
+
+LP 視角評估：
+- LP 委員會成員第一眼看的就是 Sharpe ratio 和 max drawdown — 現在系統直接提供
+- CAGR 計算避免了「簡單加總 vs 複利」的常見錯誤
+- rf=0 的 Sharpe 是對沖基金行業標準，不會造成困惑
+- % positive months 讓分析師快速判斷策略的勝率特徵
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**`_find_beginning_nav` 不支援非 USD 幣別**：
+- Iteration 9 修了 `_find_aum` 支援 € £ ¥，但 `_find_beginning_nav` 仍只找 `$`
+- EUR 基金：ending NAV 正確找到（€725M），beginning NAV = None
+- NAV reconciliation 靜默跳過（需要兩個值才能算）
+- 結果：EUR 基金失去最強的驗證工具，confidence 不受影響
+- LP 以為數據已驗證，但實際上沒有交叉驗算
+
+或者其他方向：
+- **歐洲小數格式 returns**（`1,23%`）— 逗號小數的 return 值靜默丟失
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API
+- **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較
