@@ -245,3 +245,43 @@ class TestEdgeCases:
                      "warnings", "ocr_needed"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"
+
+
+# ── Parenthetical Negative Notation (Accounting Style) ─────────────────────
+
+PAREN_PDF = "static/test_paren_negatives.pdf"
+
+@pytest.mark.skipif(not os.path.exists(PAREN_PDF), reason="Paren test PDF not generated")
+class TestParenthetical:
+    """Test accounting-style (0.91) negative notation — prevents silent upward bias."""
+
+    GT = [1.82, 0.54, -0.91, 2.13, 0.38, -1.44, 3.07, 1.21, -0.67, 1.95, 0.83, 1.42]
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.result = load_fund_from_pdf(PAREN_PDF)
+
+    def test_returns_12_months(self):
+        assert len(self.result["raw_returns"]) == 12
+
+    def test_returns_exact_match(self):
+        extracted = [round(r * 100, 2) for r in self.result["raw_returns"]]
+        for i, (e, g) in enumerate(zip(extracted, self.GT)):
+            assert abs(e - g) < 0.01, f"Month {i+1}: {e} != {g}"
+
+    def test_negative_months_preserved(self):
+        """Critical: parenthetical negatives must not be silently dropped."""
+        negatives = [r for r in self.result["raw_returns"] if r < 0]
+        assert len(negatives) == 3, f"Expected 3 negative months, got {len(negatives)}"
+
+    def test_return_type_is_net(self):
+        assert self.result["extraction"]["return_type"] == "net"
+
+    def test_fees_extracted(self):
+        assert self.result["mgmt_fee_pct"] == 1.5
+        assert self.result["incentive_fee_pct"] == 20.0
+
+    def test_nav_reconciliation(self):
+        recon = self.result["extraction"]["reconciliation"]
+        assert recon["reconciled"] is True
+        assert recon["delta_pct"] < 2.0

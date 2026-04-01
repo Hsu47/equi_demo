@@ -21,6 +21,10 @@ import pdfplumber
 _RETURN_PATTERN = re.compile(
     r"([+-]?\d{1,3}\.\d{1,4})\s*%?"   # e.g. +1.82% or -0.91
 )
+# Accounting-style parenthetical negatives: (0.91%) or (0.91)
+_PAREN_NEG_PATTERN = re.compile(
+    r"\((\d{1,3}\.\d{1,4})\s*%?\)"    # e.g. (0.91%) → captures 0.91
+)
 
 _MONTH_KEYWORDS = {
     "january", "february", "march", "april", "may", "june",
@@ -392,6 +396,7 @@ def _classify_return_type(text: str, col_return_type: str = None) -> str:
         "net of fees", "net of all fees", "after fees", "after all fees",
         "net returns", "net performance", "stated after management fees",
         "net of management", "after management fee",
+        "net of all management", "net of all applicable",
     ]
     gross_indicators = [
         "gross of fees", "before fees", "gross returns", "gross performance",
@@ -450,12 +455,18 @@ def _is_month_cell(cell_text: str) -> bool:
 
 
 def _normalize_cell(cell) -> str:
-    """Normalize a table cell value for return parsing."""
+    """Normalize a table cell value for return parsing.
+    Handles accounting-style parenthetical negatives: (0.91) → -0.91
+    """
     if cell is None:
         return ""
     s = str(cell).strip()
     # Remove percentage signs, plus signs, whitespace variants
     s = s.replace("%", "").replace("+", "").replace("\u00a0", " ").strip()
+    # Accounting-style parenthetical negatives: (0.91) → -0.91
+    paren_match = re.match(r"^\(([0-9.,]+)\)$", s)
+    if paren_match:
+        s = "-" + paren_match.group(1)
     return s
 
 
@@ -716,6 +727,16 @@ def _extract_monthly_returns_from_text(text: str, diagnostics: dict):
 
         if has_month or has_date:
             lines_scanned += 1
+            # Try parenthetical negative first: (0.91%) → -0.91
+            pm = _PAREN_NEG_PATTERN.search(line)
+            if pm:
+                try:
+                    val = -float(pm.group(1))
+                    if -20 <= val <= 20:
+                        returns.append(val / 100.0)
+                        continue
+                except ValueError:
+                    pass
             m = _RETURN_PATTERN.search(line)
             if m:
                 try:
@@ -793,8 +814,10 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
             continue
 
         year = int(m.group(1))
+        # Pre-process: convert parenthetical negatives (0.91) → -0.91
+        rest = _PAREN_NEG_PATTERN.sub(lambda pm: f"-{pm.group(1)}", line_s[4:])
         # Extract all %-like values from the rest of the line
-        values_raw = _pct_pattern.findall(line_s[4:])  # skip the year token
+        values_raw = _pct_pattern.findall(rest)  # skip the year token
         parsed = []
         for v in values_raw:
             try:
