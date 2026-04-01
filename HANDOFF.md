@@ -2,106 +2,39 @@
 
 ---
 
-## ARCHITECT → DEV: Top 3 Improvements (Priority Order)
+## Current State (Post-Iteration 10)
 
-### 1. Column-Header-Aware Parsing (P0 — Correctness)
-**Problem**: `_parse_return_from_row()` blindly takes the first numeric value after column 0. If the performance table has columns `[Month, Gross Return, Net Return, Cumulative NAV, Notes]`, it picks **Gross Return** instead of **Net Return**. In our sample PDF, the columns are `[Month, Net Return (%), Cumulative NAV, Notes]` — the parser happens to work because Net Return is first, but it would break on any PDF with a Gross column preceding Net.
+**Parser 迭代已飽和** — regex-based extraction 覆蓋 7 種格式、55 tests 全通過。
+下一階段是跨量級跳躍：LLM fallback、PDF upload、cash flow 提取。
 
-**Fix**:
-- After detecting a header row, parse column headers and build a `col_index` map
-- Prioritize "Net Return" column; fall back to "Gross Return" only if Net is absent
-- Skip columns identified as "Cumulative NAV", "Notes", "Benchmark", etc.
-- Store which column was used in diagnostics (`extraction.return_column`)
+### 已完成能力
+- ✅ Column-header-aware parsing（Net > Gross > Ambiguous）
+- ✅ Confidence score（0.0–1.0，6 維加權）
+- ✅ Robust AUM parsing（$€£¥、M/B 縮寫、ISO codes、歐洲小數格式）
+- ✅ NAV reconciliation（beginning × compound ≈ ending）
+- ✅ Fee structure extraction（mgmt + incentive + "2 and 20" 速記）
+- ✅ Trailing 12 months（跨年拼接，不用 calendar year）
+- ✅ OCR detection（偵測掃描 PDF，confidence 扣分）
+- ✅ Multi-currency（EUR/GBP/JPY 偵測 + warning）
+- ✅ Parenthetical negatives（`(0.91)%` → `-0.91`）
+- ✅ Multi-currency beginning NAV（reconciliation 不再跳過非 USD 基金）
+- ✅ Frontend trust panel（confidence、reconciliation、fees、warnings 全上 UI）
 
-**Acceptance**: Parser must correctly extract Net Return even when Gross Return column exists before it.
-
----
-
-### 2. Extraction Confidence Score (P0 — Trust Signal)
-**Problem**: Downstream consumers (scoring pipeline, UI) have no way to know if extracted data is reliable. A PDF that yields 8/12 months via text fallback looks the same as one with 12/12 via clean table parse.
-
-**Fix**: Add `extraction.confidence` (0.0–1.0) computed from:
-- `method_score`: table=1.0, text=0.5, summary=0.3, failed=0.0
-- `completeness_score`: `returns_count / 12`
-- `warning_penalty`: -0.1 per warning (floor 0)
-- Final: `confidence = method_score * 0.4 + completeness_score * 0.5 + (1 - warning_penalty) * 0.1`
-
-**Acceptance**: 12/12 months via table extraction → confidence >= 0.95. Text fallback with 8 months → confidence ~0.55.
-
----
-
-### 3. Robust AUM Parsing (P1 — Edge Cases)
-**Problem**: `_find_aum()` only matches `$X,XXX.XX` format. Real LP reports may use:
-- `$2.66M` or `$2.66 million`
-- `2,660,284 USD` (no $ prefix)
-- `NAV: 2,660,284` (no currency symbol at all)
-- Amount on a different line from the label
-
-**Fix**:
-- Add regex for `$X.XXM` / `$X.XX million` / `$X.XXB` format
-- Support `USD` suffix as alternative to `$` prefix
-- Support bare numbers on the line following an AUM label
-- Normalize all to `aum_mm` (millions)
-
-**Acceptance**: All four formats above must parse correctly to the same value.
-
----
-
-## Implementation Notes for Dev
-- All changes in `pipeline/ingest_pdf.py` only
-- Do NOT change the return dict structure (add fields, don't remove)
-- The `extraction` sub-dict can grow freely
-- Test against `static/sample_lp_report.pdf` — must still get 12/12 months, correct AUM
-- Ground truth from `generate_sample_pdf.py`:
-  ```
-  Returns: [+1.82, +0.54, -0.91, +2.13, +0.38, -1.44, +3.07, +1.21, -0.67, +1.95, +0.83, +1.42]
-  AUM: $2,660,284.00 → 2.66 (in millions)
-  ```
-
----
-
-## DEV → QA: Ready for Review
-
-**Commit**: `a6eb88b` — `feat: column-aware parsing, confidence score, robust AUM extraction`
-
-### What was implemented:
-1. **Column-header-aware parsing** — `_find_return_column()` maps header cells, prioritizes "Net Return" over "Gross Return", skips cumulative/benchmark columns. Stored in `extraction.return_column`.
-2. **Risk-table disambiguation** — `_RISK_TABLE_KEYWORDS` prevents rows with "annualized", "volatility", "sharpe" etc. from triggering performance header detection. Table selection now prefers the table with the most matches.
-3. **Confidence score** — `extraction.confidence` (0.0–1.0) computed from method, completeness, and warnings.
-4. **Robust AUM parsing** — `_try_parse_amount()` handles $X.XXM, $X.XXB, X USD, bare numbers.
-
-### Test results:
-```
-Returns: 12/12 months — all match ground truth exactly
-AUM: 2.66 (correct)
-Confidence: 1.0
-Return column: "net return (%)"
-Method: table
-Warnings: none
+### 驗證方式
+```bash
+# PDF sample 測試 + 全格式 pytest（55 tests must all pass）
+python -c "from pipeline.ingest_pdf import load_fund_from_pdf; import json; r = load_fund_from_pdf('static/sample_lp_report.pdf'); print(json.dumps({k:v for k,v in r.items() if k != 'extraction'}, indent=2))"
+python -m pytest tests/ -v
 ```
 
----
-
-## QA → ARCHITECT: Approved with Notes
-
-### QA Results (LP Investor Perspective)
-
-**PASS** — All acceptance criteria met:
-
-| Check | Result |
-|-------|--------|
-| 12 monthly returns match ground truth | 12/12 exact match |
-| AUM correct ($2,660,284 → 2.66M) | Correct |
-| Confidence score meaningful (1.0 for perfect extraction) | Correct |
-| Return column identified ("net return (%)") | Correct |
-| Non-existent PDF raises clear error | FileNotFoundError raised |
-| Risk metrics table NOT confused with perf table | Correctly disambiguated |
-
-### Notes for Future Iterations
-1. **No OCR** — scanned PDFs will fail silently (returns empty). Production needs Textract or similar.
-2. **Single-format tested** — only the sample PDF was tested. Need real GP reports (varying formats) for robustness validation.
-3. **No fee extraction** — management fee (1%) and incentive (10%) are visible in the PDF but not extracted. Relevant for net-to-gross reconciliation.
-4. **Confidence floor** — a PDF with 3/12 months via text fallback gets confidence ~0.37, which is low but might still be useful to flag rather than reject entirely.
+### 下一階段路線圖
+| 優先級 | 功能 | 為什麼 |
+|--------|------|--------|
+| **P0** | LLM fallback | confidence < 0.7 自動送 Claude API — zero-shot extraction，不需要 template |
+| **P1** | PDF upload UI | demo 可上傳任意 PDF，不只 sample |
+| **P2** | Cash flow 提取 | Capital calls / distributions — LP 日常最痛的場景 |
+| **P3** | 歐洲 return 格式 | `1,23%` 逗號小數點支援 |
+| **P4** | `_try_parse_amount` DRY 重構 | `_find_aum` 和 `_find_beginning_nav` 共用邏輯 |
 
 ---
 

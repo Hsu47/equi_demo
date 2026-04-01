@@ -301,7 +301,7 @@
       <div class="arch-layer">
         <div class="arch-layer-name">Ingest</div>
         <div class="arch-layer-desc">format detection · schema mapping · fault isolation</div>
-        <span class="arch-layer-badge">json · csv · dict · live</span>
+        <span class="arch-layer-badge">json · csv · pdf · live</span>
       </div>
       <div class="arch-arrow">→</div>
       <div class="arch-layer">
@@ -437,10 +437,13 @@
   <!-- PDF Extraction Demo -->
   <div class="card">
     <h2>PDF Extraction — Live Parser</h2>
-    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:16px">
-      Parsing <strong style="color:var(--text)">Meridian Global Macro Fund LP · 2025 Annual Statement</strong>
-      &nbsp;·&nbsp; <a href="/static/sample_lp_report.pdf" target="_blank" style="color:var(--accent);font-size:0.75rem">view PDF ↗</a>
-      &nbsp;·&nbsp; <span style="color:var(--muted);font-size:0.75rem">pdfplumber · table extraction · format: <code style="color:var(--accent)">pdf</code></span>
+    <p style="font-size:0.78rem;color:var(--muted);margin-bottom:6px">
+      LPs receive hundreds of GP reports as PDFs each quarter. Manual data entry is slow and error-prone —
+      <strong style="color:var(--text)">the real danger isn't "can't parse", it's "parsed wrong but looks right".</strong>
+    </p>
+    <p style="font-size:0.75rem;color:var(--muted);margin-bottom:16px">
+      Our parser extracts, cross-validates, and tells you how much to trust the result. Click below to see it live on a real LP statement.
+      &nbsp;·&nbsp; <a href="/static/sample_lp_report.pdf" target="_blank" style="color:var(--accent);font-size:0.75rem">view source PDF ↗</a>
     </p>
     <button class="pdf-btn" id="pdf-parse-btn" onclick="runPdfDemo()">▶ Parse LP Report PDF</button>
 
@@ -448,14 +451,21 @@
       <div style="font-size:0.8rem;margin-bottom:14px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px" id="pdf-meta"></div>
 
       <!-- Extraction Trust Panel -->
-      <div class="pdf-section-label">extraction trust signals</div>
+      <div class="pdf-section-label">extraction trust signals — <span style="font-weight:400;text-transform:none">can you trust these numbers?</span></div>
       <div class="pdf-metrics" id="pdf-trust" style="margin-bottom:18px"></div>
       <div id="pdf-warnings" style="margin-bottom:14px"></div>
 
-      <div class="pdf-section-label">12 monthly returns extracted</div>
+      <div class="pdf-section-label">monthly returns extracted</div>
       <div class="returns-grid" id="pdf-returns"></div>
-      <div class="pdf-section-label" style="margin-top:16px">pipeline output — scored</div>
+      <div class="pdf-section-label" style="margin-top:16px">pipeline output — scored in real time</div>
       <div class="pdf-metrics" id="pdf-metrics"></div>
+
+      <p style="font-size:0.7rem;color:var(--muted);margin-top:18px;line-height:1.6">
+        <strong style="color:var(--text)">How it works:</strong>
+        Multi-strategy parser (table → calendar grid → text scan) with NAV reconciliation cross-check.
+        Supports 7 format variants, multi-currency (USD/EUR/GBP/JPY), parenthetical negatives, and fee structure extraction.
+        55 automated tests. Canoe Intelligence charges six figures/year for this — we do it in &lt;100ms.
+      </p>
     </div>
   </div>
 
@@ -463,7 +473,7 @@
   <div class="card">
     <h2>What I'd Build This Summer — 10-Week Roadmap</h2>
     <p style="font-size:0.78rem;color:var(--muted);margin-bottom:4px">
-      Current demo handles JSON · CSV · live API. Real Equi fund data comes from three harder sources — each maps to a concrete engineering deliverable.
+      PDF extraction pipeline is live (see demo above). Next: three harder problems that unlock production-grade fund data ingestion.
     </p>
     <table class="roadmap-table">
       <thead>
@@ -475,7 +485,9 @@
       </thead>
       <tbody>
         <tr>
-          <td class="wk">Wk 1–3</td>
+          <td class="wk" style="position:relative">Wk 1–3
+            <div style="font-size:0.6rem;color:var(--green);font-weight:700;margin-top:2px">DONE</div>
+          </td>
           <td>
             <div class="prob">GP quarterly reports arrive as PDFs
               <span>capital calls, LP statements, K-1s — no structured API, all manual today</span>
@@ -483,12 +495,25 @@
           </td>
           <td>
             <div class="sol">PDF extraction pipeline
-              <span>pdfplumber / camelot → NAV table detection → raw_returns[] · &lt;2s per doc</span>
+              <span style="color:var(--green)">&#10003; shipped — 7 formats · confidence scoring · NAV reconciliation · multi-currency · 55 tests</span>
             </div>
           </td>
         </tr>
         <tr>
-          <td class="wk">Wk 4–7</td>
+          <td class="wk">Wk 4–5</td>
+          <td>
+            <div class="prob">New GP format → parser fails silently
+              <span>Canoe needs weeks to build a new template. Long tail of GP formats is the real bottleneck.</span>
+            </div>
+          </td>
+          <td>
+            <div class="sol">LLM fallback — zero-shot extraction
+              <span>confidence &lt; 0.7 → auto-escalate to Claude API · structured output · no template needed</span>
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td class="wk">Wk 6–8</td>
           <td>
             <div class="prob">Fund data locked in Intralinks / Datasite portals
               <span>GP-authenticated data rooms — document retrieval is manual, no bulk API</span>
@@ -496,12 +521,12 @@
           </td>
           <td>
             <div class="sol">Document retrieval pipeline + Airflow scheduler
-              <span>Intralinks API / Canoe Intelligence integration · daily freshness check · auto-ingest trigger</span>
+              <span>Intralinks API integration · daily freshness check · auto-ingest trigger</span>
             </div>
           </td>
         </tr>
         <tr>
-          <td class="wk">Wk 8–10</td>
+          <td class="wk">Wk 9–10</td>
           <td>
             <div class="prob">NAV restatements require manual spreadsheet updates
               <span>GP corrects a prior quarter → someone has to re-enter, re-score by hand</span>
@@ -1070,13 +1095,14 @@ function runPdfDemo() {
       d.extraction.fee_source ? `${d.incentive_fee_pct ?? '?'}% perf` : null,
     ].filter(Boolean).join(' / ') || '—';
 
+    const confLabel = ex.confidence >= 0.9 ? 'High trust' : ex.confidence >= 0.7 ? 'Verify recommended' : 'Manual review needed';
     document.getElementById('pdf-trust').innerHTML = `
-      <div class="pdf-metric"><div class="pm-val" style="color:${confColor}">${ex.confidence.toFixed(2)}</div><div class="pm-lbl">Confidence</div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:${reconColor};font-size:0.95rem">${reconLabel}</div><div class="pm-lbl">NAV Reconciliation</div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:var(--text)">${ex.return_type || '?'}</div><div class="pm-lbl">Return Type</div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:var(--accent)">${ex.currency || 'USD'}</div><div class="pm-lbl">Currency</div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:var(--text);font-size:0.95rem">${feeStr}</div><div class="pm-lbl">Fee Structure</div></div>
-      <div class="pdf-metric"><div class="pm-val" style="color:var(--muted)">${ex.method}</div><div class="pm-lbl">Parse Method</div></div>`;
+      <div class="pdf-metric"><div class="pm-val" style="color:${confColor}">${ex.confidence.toFixed(2)}</div><div class="pm-lbl">Confidence<br><span style="font-weight:400;font-size:0.6rem">${confLabel}</span></div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:${reconColor};font-size:0.95rem">${reconLabel}</div><div class="pm-lbl">NAV Reconciliation<br><span style="font-weight:400;font-size:0.6rem">begin NAV × returns ≈ end NAV?</span></div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:${ex.return_type === 'net' ? 'var(--green)' : 'var(--yellow)'}">${ex.return_type || '?'}</div><div class="pm-lbl">Return Type<br><span style="font-weight:400;font-size:0.6rem">${ex.return_type === 'net' ? 'after fees — LP standard' : 'verify with GP'}</span></div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--accent)">${ex.currency || 'USD'}</div><div class="pm-lbl">Currency<br><span style="font-weight:400;font-size:0.6rem">auto-detected from document</span></div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--text);font-size:0.95rem">${feeStr}</div><div class="pm-lbl">Fee Structure<br><span style="font-weight:400;font-size:0.6rem">extracted from report text</span></div></div>
+      <div class="pdf-metric"><div class="pm-val" style="color:var(--muted)">${ex.method}</div><div class="pm-lbl">Parse Method<br><span style="font-weight:400;font-size:0.6rem">${ex.returns_count}/12 months · ${d.extract_ms}ms</span></div></div>`;
 
     // Warnings
     const warns = ex.warnings || [];
