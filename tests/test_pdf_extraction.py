@@ -308,6 +308,20 @@ class TestFormatF:
     def test_method(self):
         assert self.ext["method"] == "table"
 
+    def test_beginning_nav_eur(self):
+        """Beginning NAV must be parsed for EUR funds (€ symbol support)."""
+        assert self.result["beginning_nav_mm"] == self.gt["beginning_nav_mm"]
+
+    def test_nav_reconciliation_eur(self):
+        """EUR fund should have NAV reconciliation (not silently skipped)."""
+        recon = self.ext["reconciliation"]
+        assert recon is not None, "Reconciliation should not be None for EUR fund"
+        assert recon["reconciled"], f"NAV reconciliation failed: delta {recon['delta_pct']}%"
+
+    def test_confidence_with_reconciliation(self):
+        """With reconciliation passing, confidence should be 1.0."""
+        assert self.ext["confidence"] == 1.0
+
 
 # ── Edge cases ───────────────────────────────────────────────────────────────
 

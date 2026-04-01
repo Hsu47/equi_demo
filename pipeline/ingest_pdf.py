@@ -334,17 +334,37 @@ def _find_aum(text: str):
 
 
 def _find_beginning_nav(text: str):
-    """Extract beginning NAV using same multi-format logic as _find_aum."""
+    """
+    Extract beginning NAV using same multi-format, multi-currency logic as _find_aum.
+    Supports $, €, £, ¥ symbols, ISO currency codes, abbreviated formats, and
+    European decimal notation.
+    """
     lines = text.splitlines()
+    _SYM = r"[\$€£¥]"
+    _ISO_CODES = "|".join(_CURRENCY_CODES)
 
     def _try_parse_amount(search_text):
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
+        """Try multiple NAV formats on a text string. Returns value in millions or None."""
+        # Format 0: European decimal format: 676.055.043,00
+        eu_val = _parse_european_number(search_text)
+        if eu_val is not None and eu_val > 100_000:
+            return round(eu_val / 1_000_000, 2)
+        # Format 1: [symbol]X.XXM / [symbol]X.XX million
+        m = re.search(_SYM + r"([\d,.]+)\s*[Mm](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")), 2)
             except ValueError:
                 pass
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
+        # Format 2: [symbol]X.XXB / [symbol]X.XX billion
+        m = re.search(_SYM + r"([\d,.]+)\s*[Bb](?:illion)?", search_text)
+        if m:
+            try:
+                return round(float(m.group(1).replace(",", "")) * 1000, 2)
+            except ValueError:
+                pass
+        # Format 3: [symbol]X,XXX,XXX.XX (standard format with any currency symbol)
+        m = re.search(_SYM + r"([\d,]+(?:\.\d{1,2})?)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -352,7 +372,17 @@ def _find_beginning_nav(text: str):
                     return round(val / 1_000_000, 2)
             except ValueError:
                 pass
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
+        # Format 4: X,XXX,XXX [ISO_CODE] (e.g. "676,055,043 EUR")
+        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:" + _ISO_CODES + r")\b", search_text)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", ""))
+                if val > 100_000:
+                    return round(val / 1_000_000, 2)
+            except ValueError:
+                pass
+        # Format 5: bare large number (no currency symbol)
+        m = re.search(r"(?<!\d)([\d,]{7,}(?:\.\d{1,2})?)(?!\d)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
