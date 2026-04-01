@@ -56,6 +56,13 @@ GROUND_TRUTH = {
         "aum_mm": 3200.0,
         "trailing_period": True,  # should show trailing period, not calendar year
     },
+    "format_e_eur_fund.pdf": {
+        "monthly_returns": GT_MONTHLY,
+        "aum_mm": 750.0,
+        "currency": "EUR",
+        "beginning_nav_mm": 700.0,
+        "return_type": "net",
+    },
 }
 
 
@@ -327,6 +334,78 @@ def build_format_d():
     print(f"  ✓ Format D (calendar grid, partial year): {path}")
 
 
+# ── Format E: EUR-denominated fund ───────────────────────────────────────────
+
+def build_format_e():
+    """
+    European fund report using EUR currency throughout.
+    Tests multi-currency AUM parsing: €750M ending NAV, €700M beginning NAV.
+    """
+    path = os.path.join(OUTPUT_DIR, "format_e_eur_fund.pdf")
+    doc = SimpleDocTemplate(path, pagesize=letter,
+                            rightMargin=0.75*inch, leftMargin=0.75*inch,
+                            topMargin=0.75*inch, bottomMargin=0.6*inch)
+    st = _styles()
+    story = []
+
+    story.append(Paragraph("Brevan Howard Alpha EUR Fund LP", st["title"]))
+    story.append(Paragraph("Quarterly Performance Report — Q4 2025", st["sub"]))
+    story.append(Paragraph("Brevan Howard Asset Management LLP", st["sub"]))
+    story.append(Spacer(1, 0.15*inch))
+
+    # Fund overview with EUR
+    story.append(Paragraph("Fund Overview", st["section"]))
+    overview = [
+        ["Net Assets", "\u20ac750M", "Strategy", "Global Macro"],
+        ["Inception", "April 2015", "Base Currency", "EUR"],
+        ["Management Fee", "2%", "Incentive Fee", "20%"],
+    ]
+    t = Table(overview, colWidths=[1.3*inch, 1.5*inch, 1.3*inch, 2.2*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Capital account in EUR
+    story.append(Paragraph("Capital Account Summary", st["section"]))
+    cap = [
+        ["Beginning NAV (Jan 1, 2025)", "\u20ac700,000,000"],
+        ["Ending NAV (Dec 31, 2025)", "\u20ac750,000,000"],
+    ]
+    t = Table(cap, colWidths=[4*inch, 2.5*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Monthly returns table
+    story.append(Paragraph("Monthly Net Returns (%)", st["section"]))
+    header = ["Month", "Net Return (%)", "Cumulative NAV"]
+    rows = [header]
+    cum = 100.0
+    for i, r in enumerate(GT_MONTHLY):
+        cum *= (1 + r / 100)
+        month_name = f"{GT_MONTHS[i]} 2025"
+        rows.append([month_name, f"{r:+.2f}%", f"{cum:.2f}"])
+    t = Table(rows, colWidths=[2*inch, 1.5*inch, 1.5*inch])
+    t.setStyle(_table_style_basic())
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph(
+        "All figures in EUR. Returns are net of all fees and expenses. "
+        "Past performance is not indicative of future results.",
+        st["disc"]))
+    doc.build(story)
+    print(f"  \u2713 Format E (EUR fund): {path}")
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating test PDFs...")
@@ -334,6 +413,7 @@ def main():
     build_format_b()
     build_format_c()
     build_format_d()
+    build_format_e()
     print(f"\nGround truth for validation:")
     for name, gt in GROUND_TRUTH.items():
         print(f"  {name}: {len(gt['monthly_returns'])} months, AUM={gt.get('aum_mm')}")
