@@ -504,3 +504,88 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：如果一份歐洲基金的 LP 報告寫 "Ending NAV: €1.2B"，我們的 parser 會怎樣？
+
+答案：**`_find_aum()` 只認 `$` 和 `USD`**。€1.2B 完全不會被匹配到，AUM = None。
+但更危險的是邊界情況：如果報告寫 "1,200,000,000 EUR"，bare number regex 會抓到 1200.0，
+但 **沒有任何幣別標記**。LP 委員會看到 AUM = $1,200M，實際是 €1,200M。
+
+對 CalPERS 這樣持有全球配置的機構，這直接影響：
+- Portfolio weight 計算（€ vs $ 差異 ~8-10%）
+- Cross-fund comparison（USD 基金 vs EUR 基金的 AUM 不能直接比）
+- Regulatory reporting（GIPS 要求明確幣別標示）
+
+這是**靜默數據汙染**——數字完全合理，沒有任何 warning，但幣別是錯的。
+
+### DEV
+新增三個元件：
+- `_detect_currency(text)` — 4 層優先級偵測：
+  1. 明確標籤：「Fund Currency: EUR」「Denominated in GBP」
+  2. NAV/AUM 標籤附近的幣別符號：「Ending NAV: €1.2B」
+  3. 全文幣別符號頻率（$, €, £, ¥）近數字的出現次數
+  4. ISO code 頻率（USD, EUR, GBP 等在全文出現的次數）
+- `_find_aum()` / `_find_beginning_nav()` 擴充：
+  - 支援 €, £, ¥, CHF, A$, C$, HK$, S$ 等符號
+  - 支援 `X.XXM EUR` / `X.XXB GBP` 等「數字+後綴幣別碼」格式
+- Confidence / warning 調整：
+  - currency_confidence="low" → -0.05 confidence
+  - 非 USD → warning 提醒需要 FX 轉換
+  - currency_confidence="low" → warning 提醒幣別未確認
+
+Output 新增欄位：
+- `currency`（主 dict）— ISO code
+- `currency`, `currency_source`, `currency_confidence`（extraction dict）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**46/46 tests PASSED** (1.90 seconds)
+
+回歸測試：
+
+| Check | Result |
+|-------|--------|
+| 12 monthly returns match ground truth | 12/12 exact match |
+| AUM = 2.66 | Correct |
+| Confidence = 1.0 | Correct |
+| currency = "USD" | Correct (source: explicit_label) |
+| 全部 5 種格式 PDF | PASS |
+| 無 regression | Confirmed |
+
+新增幣別偵測測試（10 個案例）：
+
+| 情境 | 偵測結果 | 來源 |
+|------|---------|------|
+| "Fund Currency: EUR" | EUR | explicit_label, high |
+| "Ending NAV: £850M" | GBP | nav_context, high |
+| "Fund Assets: CHF 420M" | CHF | nav_context, high |
+| "Total Assets: ¥12.5B" | JPY | nav_context, high |
+| "denominated in GBP" | GBP | explicit_label, high |
+| 無幣別資訊 | USD (default) | default, low |
+| €850M AUM 解析 | 850.0 | Correct |
+| £1.2B AUM 解析 | 1200.0 | Correct |
+
+LP 視角評估：
+- 分析師看到 `currency: "EUR"` → 知道 AUM 是歐元計價，需要 FX 轉換
+- 不再有「€1.2B 被當成 $1.2B」的靜默錯誤
+- `currency_confidence: "low"` + warning → 分析師知道要手動確認
+- 支援 8 種幣別符號 + 18 種 ISO code → 覆蓋全球主要市場
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**Benchmark 提取（silent alpha miscalculation）**：
+- LP 委員會評估基金時，永遠是「相對表現」：fund return vs benchmark
+- 如果只有 absolute return 沒有 benchmark，分析師會用錯誤的 benchmark 比較
+- 很多 LP 報告在同一張表裡同時有 fund return 和 benchmark return
+- 目前我們可能把 benchmark 數字誤認為 fund return（特別是在 fallback 方法中）
+
+或者更有 demo 價值的方向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **v2.5: Format Registry** — 記住已知格式指紋（production 穩定性）
+- **European number format** — 1.234,56 vs 1,234.56（歐洲基金常見）
