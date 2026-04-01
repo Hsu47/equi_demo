@@ -504,3 +504,88 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：LP 委員會比較不同基金時，最容易犯的錯誤是什麼？
+
+答案：**跨幣別 AUM 混淆**。一個歐洲 PE 基金報告用 EUR，亞洲 HF 用 JPY/HKD。
+目前的 parser：
+- `$` regex 不匹配 `€2.66M` → AUM 返回 None（丟失可用數據）
+- 但 bare number 格式 `(?<!\d)([\d,]{7,})` **會**匹配 `€2,660,284` → AUM = 2.66，**無幣別標記**
+- LP 委員會把 EUR AUM 跟 USD AUM 放在同一比較表 → 配置決策偏差 ~10-15%
+- 完全靜默：數字合理，confidence = 1.0，zero warnings
+
+這不是「nice to have」——LP 投資組合跨地域配置是常態，幣別是最基本的元數據。
+
+### DEV
+新增三個核心改動：
+
+1. **`_detect_currency(text)`** — 3-pass 偵測策略：
+   - Pass 1：AUM/NAV 標籤行的貨幣符號（$, €, £, ¥）→ 最強信號
+   - Pass 2：全文掃描 ISO 代碼（USD, EUR, GBP, JPY, CHF, CAD, AUD, HKD, SGD, CNY, KRW, SEK, NOK, DKK, NZD）近數字位置
+   - Pass 3：任何貨幣符號出現 → 最弱信號
+   - 無信號 → 預設 "USD"
+
+2. **擴充 `_find_aum()` 和 `_find_beginning_nav()`**：
+   - 原本只匹配 `$` → 現在匹配 `[$€£¥]` 的動態 regex
+   - ISO 代碼後綴從只有 `USD` → 支援所有 15 個幣別代碼
+   - Billion/Million 格式同樣支援非美元符號
+
+3. **Output 新增欄位**：
+   - `currency`（主 dict）— ISO 4217 代碼
+   - `extraction.currency` — 重複放入 extraction metadata 方便下游
+
+4. **14 個新測試**：
+   - `TestCurrencyDetection`（8 tests）：各種符號、ISO 代碼、預設值
+   - `TestMultiCurrencyAum`（5 tests）：EUR/GBP/JPY/CHF/USD AUM 解析
+   - `TestEdgeCases::test_currency_field_present`（1 test）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**50/50 tests PASSED** (2.09 seconds)
+
+sample_lp_report.pdf 回歸測試：
+
+| Check | Result |
+|-------|--------|
+| 12 monthly returns match ground truth | 12/12 exact match |
+| AUM = 2.66 | Correct |
+| Confidence = 1.0 | Correct |
+| currency = "USD" | Correct (detected from $ in NAV line) |
+| mgmt_fee_pct = 1.0 | Correct |
+| return_type = "net" | Correct |
+| No regressions | 36/36 original tests pass |
+
+多幣別測試結果：
+
+| 輸入 | 幣別偵測 | AUM 解析 |
+|------|---------|---------|
+| `€2,660,284.00` | EUR ✓ | 2.66 ✓ |
+| `£1.5M` | GBP ✓ | 1.5 ✓ |
+| `¥2.5B` | JPY ✓ | 2500.0 ✓ |
+| `5,000,000 CHF` | CHF ✓ | 5.0 ✓ |
+| `$2,660,284.00` | USD ✓ | 2.66 ✓ (no regression) |
+
+LP 視角評估：
+- 分析師比較跨地域基金時，現在看得到 `currency: "EUR"` — 不再盲目比較
+- 如果系統同時顯示 `Fund A: AUM $2.66M USD` 和 `Fund B: AUM €1.5M EUR`，分析師知道要做匯率轉換
+- 預設 USD 是合理的：LP 報告中 USD 是最常見幣別，且當找不到幣別標記時，保守假設 USD 比「Unknown」更實用
+- 支援 15 個 ISO 代碼覆蓋了全球主要市場
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**LLM fallback（v2.6）**：
+- 我們現在有完整的 confidence + OCR + 幣別 + 費用 + return type 機制
+- 當 confidence < 0.6 或 ocr_needed=true，與其給出不可靠數據，直接送 Claude API
+- Claude 可以「看」圖片，處理掃描件，理解非標準格式
+- 這是 demo 的殺手級功能
+
+或者：
+- **v2.5: Format Registry** — 記住已知格式指紋，production 穩定性
+- **Parenthetical negative handling** — `(0.91)` 在金融 PDF 中代表 -0.91%，目前未處理
+- **Benchmark extraction** — 抓 benchmark return 讓 LP 做相對績效比較
