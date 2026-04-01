@@ -1039,6 +1039,95 @@ def _extract_summary_performance(text: str) -> dict:
     return summary
 
 
+def _extract_risk_metrics(text: str) -> dict:
+    """
+    Extract risk & performance metrics from LP report text.
+
+    Scans for common risk metrics found in capital account statements:
+      - Annualized Return
+      - Annualized Volatility
+      - Sharpe Ratio
+      - Maximum Drawdown
+      - Sortino Ratio
+      - Correlation to benchmark
+      - Beta to benchmark
+
+    Returns dict of found metrics (empty dict if none found).
+    """
+    metrics = {}
+    lines = text.splitlines()
+
+    # Each pattern: (metric_key, regex, value_transform)
+    # value_transform: "pct" = divide by 100, "raw" = use as-is
+    _metric_patterns = [
+        ("annualized_return",    re.compile(r"annualized\s+return[^:\d]*?([+-]?\d{1,3}\.\d{1,2})\s*%", re.IGNORECASE), "pct"),
+        ("annualized_volatility", re.compile(r"annualized\s+volatility[^:\d]*?(\d{1,3}\.\d{1,2})\s*%", re.IGNORECASE), "pct"),
+        ("sharpe_ratio",         re.compile(r"sharpe\s+ratio\s*(?:\([^)]*\))?\s*(?:[:=])?\s*([+-]?\d{1,2}\.\d{1,2})\b", re.IGNORECASE), "raw"),
+        ("max_drawdown",         re.compile(r"max(?:imum)?\s+drawdown[^:\d]*?([+-]?\d{1,3}\.\d{1,2})\s*%", re.IGNORECASE), "pct"),
+        ("sortino_ratio",        re.compile(r"sortino\s+ratio[^:\d]*?([+-]?\d{1,2}\.\d{1,2})", re.IGNORECASE), "raw"),
+        ("calmar_ratio",         re.compile(r"calmar\s+ratio[^:\d]*?([+-]?\d{1,2}\.\d{1,2})", re.IGNORECASE), "raw"),
+    ]
+
+    for key, pat, transform in _metric_patterns:
+        m = pat.search(text)
+        if m:
+            try:
+                val = float(m.group(1))
+                if transform == "pct":
+                    val = val / 100.0
+                metrics[key] = round(val, 6)
+            except ValueError:
+                pass
+
+    # Benchmark correlation and beta: "Correlation to S&P 500 (SPY) -0.12"
+    _benchmark_patterns = [
+        (re.compile(r"correlation\s+to\s+(.+?)\s+([+-]?\d\.\d{1,2})", re.IGNORECASE), "correlation"),
+        (re.compile(r"beta\s+to\s+(.+?)\s+([+-]?\d\.\d{1,2})", re.IGNORECASE), "beta"),
+    ]
+    for pat, metric_type in _benchmark_patterns:
+        m = pat.search(text)
+        if m:
+            benchmark_name = m.group(1).strip().rstrip("(").strip()
+            try:
+                val = float(m.group(2))
+                metrics[f"benchmark_{metric_type}"] = round(val, 4)
+                if "benchmark_name" not in metrics:
+                    metrics["benchmark_name"] = benchmark_name
+            except ValueError:
+                pass
+
+    return metrics if metrics else None
+
+
+def _cross_validate_annualized_return(monthly_returns: list, stated_annual: float) -> dict:
+    """
+    Cross-validate stated annualized return against compounded monthly returns.
+
+    This catches discrepancies between the risk metrics section and the
+    monthly performance table — a sign of data extraction error or
+    report inconsistency.
+
+    Returns:
+        {
+            "stated_annual":   float,  # from risk metrics section
+            "computed_annual":  float,  # compounded from monthly returns
+            "delta_pct":       float,  # absolute difference in percentage points
+            "validated":       bool,   # True if delta < 1.0 pp
+        }
+    """
+    compound = 1.0
+    for r in monthly_returns:
+        compound *= (1.0 + r)
+    computed_annual = compound - 1.0
+    delta_pct = abs(computed_annual - stated_annual) * 100  # in percentage points
+    return {
+        "stated_annual":  round(stated_annual, 6),
+        "computed_annual": round(computed_annual, 6),
+        "delta_pct":      round(delta_pct, 2),
+        "validated":      delta_pct < 1.0,
+    }
+
+
 def load_fund_from_pdf(path: str) -> dict:
     """
     Main entry point. Parse an LP report PDF and return a normalized fund dict.
@@ -1158,6 +1247,22 @@ def load_fund_from_pdf(path: str) -> dict:
                 f"vs stated {aum_mm}M (delta {reconciliation['delta_pct']}%)"
             )
 
+    # ── Risk metrics extraction ──────────────────────────────────────────────
+    risk_metrics = _extract_risk_metrics(text)
+
+    # Cross-validate annualized return if both risk metrics and monthly returns available
+    annualized_return_check = None
+    if risk_metrics and "annualized_return" in risk_metrics and len(returns) >= 12:
+        annualized_return_check = _cross_validate_annualized_return(
+            returns, risk_metrics["annualized_return"]
+        )
+        if not annualized_return_check["validated"]:
+            warnings.append(
+                f"Annualized return cross-validation failed: stated {risk_metrics['annualized_return']:.2%} "
+                f"vs computed {annualized_return_check['computed_annual']:.2%} "
+                f"(delta {annualized_return_check['delta_pct']} pp)"
+            )
+
     # ── Currency warning ──────────────────────────────────────────────────────
     if currency_info["currency"] != "USD":
         warnings.append(
@@ -1218,6 +1323,7 @@ def load_fund_from_pdf(path: str) -> dict:
         "mgmt_fee_pct":      fees["mgmt_fee_pct"],
         "incentive_fee_pct": fees["incentive_fee_pct"],
         "raw_returns":       returns,
+        "risk_metrics":      risk_metrics,
         "source_format":     "pdf",
         "source_path":       path,
         "extraction": {
@@ -1243,6 +1349,7 @@ def load_fund_from_pdf(path: str) -> dict:
             "warnings":              warnings,
             "summary_perf":     summary_perf,
             "reconciliation":   reconciliation,
+            "annualized_return_check": annualized_return_check,
         },
     }
 

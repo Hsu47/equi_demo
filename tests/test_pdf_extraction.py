@@ -88,6 +88,31 @@ class TestSamplePdf:
     def test_fund_name(self):
         assert "Meridian" in self.result["name"]
 
+    def test_risk_metrics_present(self):
+        rm = self.result["risk_metrics"]
+        assert rm is not None
+        assert rm["annualized_return"] == pytest.approx(0.1064, abs=1e-4)
+        assert rm["annualized_volatility"] == pytest.approx(0.0682, abs=1e-4)
+        assert rm["sharpe_ratio"] == pytest.approx(0.82, abs=1e-2)
+        assert rm["max_drawdown"] == pytest.approx(-0.0217, abs=1e-4)
+        assert rm["sortino_ratio"] == pytest.approx(1.44, abs=1e-2)
+
+    def test_benchmark_info(self):
+        rm = self.result["risk_metrics"]
+        assert rm["benchmark_correlation"] == pytest.approx(-0.12, abs=1e-2)
+        assert rm["benchmark_beta"] == pytest.approx(0.04, abs=1e-2)
+        assert "S&P 500" in rm["benchmark_name"]
+
+    def test_annualized_return_cross_validation(self):
+        check = self.ext["annualized_return_check"]
+        assert check is not None
+        assert check["validated"] is True
+        assert check["delta_pct"] < 1.0
+
+    def test_risk_metrics_in_output(self):
+        """risk_metrics should be a top-level field."""
+        assert "risk_metrics" in self.result
+
 
 # ── Multi-format tests ───────────────────────────────────────────────────────
 
@@ -329,7 +354,8 @@ class TestEdgeCases:
     def test_required_fields_present(self):
         result = load_fund_from_pdf(SAMPLE_PDF)
         required = ["fund_id", "ticker", "name", "aum_mm", "raw_returns",
-                     "source_format", "source_path", "extraction", "currency"]
+                     "source_format", "source_path", "extraction", "currency",
+                     "risk_metrics"]
         for field in required:
             assert field in result, f"Missing required field: {field}"
 
@@ -337,6 +363,7 @@ class TestEdgeCases:
         result = load_fund_from_pdf(SAMPLE_PDF)
         ext = result["extraction"]
         required = ["method", "confidence", "returns_count", "return_type",
-                     "warnings", "ocr_needed", "currency", "currency_source"]
+                     "warnings", "ocr_needed", "currency", "currency_source",
+                     "annualized_return_check"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"
