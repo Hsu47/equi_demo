@@ -309,6 +309,52 @@ class TestFormatF:
         assert self.ext["method"] == "table"
 
 
+# ── Performance statistics ──────────────────────────────────────────────────
+
+class TestPerformanceStats:
+    """Verify auto-computed performance statistics from extracted returns."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.result = load_fund_from_pdf(SAMPLE_PDF)
+        self.ps = self.result["extraction"]["performance_stats"]
+
+    def test_stats_present(self):
+        assert self.ps is not None
+
+    def test_annualized_return(self):
+        """Sample fund: 12 months compound ~ 10.72% annualized."""
+        assert 8.0 < self.ps["annualized_return_pct"] < 15.0
+
+    def test_annualized_vol(self):
+        """Monthly vol ~1.35% → annualized ~4.7%."""
+        assert 2.0 < self.ps["annualized_vol_pct"] < 10.0
+
+    def test_sharpe_ratio(self):
+        """Good fund, Sharpe should be positive and reasonable."""
+        assert self.ps["sharpe_ratio"] is not None
+        assert 0.5 < self.ps["sharpe_ratio"] < 5.0
+
+    def test_max_drawdown(self):
+        """Max drawdown should be small positive percentage."""
+        assert 0.0 < self.ps["max_drawdown_pct"] < 20.0
+
+    def test_cumulative_return(self):
+        """Cumulative should be positive for this fund."""
+        assert self.ps["cumulative_return_pct"] > 0
+
+    def test_best_worst_month(self):
+        assert self.ps["best_month_pct"] == 3.07
+        assert self.ps["worst_month_pct"] == -1.44
+
+    def test_pct_positive(self):
+        """9 of 12 months positive = 75%."""
+        assert self.ps["pct_positive_months"] == 75.0
+
+    def test_months_count(self):
+        assert self.ps["months_count"] == 12
+
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 class TestEdgeCases:
@@ -337,6 +383,7 @@ class TestEdgeCases:
         result = load_fund_from_pdf(SAMPLE_PDF)
         ext = result["extraction"]
         required = ["method", "confidence", "returns_count", "return_type",
-                     "warnings", "ocr_needed", "currency", "currency_source"]
+                     "warnings", "ocr_needed", "currency", "currency_source",
+                     "performance_stats"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"

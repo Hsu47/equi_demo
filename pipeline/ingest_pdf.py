@@ -502,6 +502,79 @@ def _classify_return_type(text: str, col_return_type: str = None) -> str:
     return "unknown"
 
 
+def _compute_performance_stats(monthly_returns: list) -> dict:
+    """
+    Compute key performance statistics from monthly returns (as decimals).
+
+    Returns:
+        {
+            "annualized_return_pct":   float,  # CAGR in %
+            "annualized_vol_pct":      float,  # annualized std dev in %
+            "sharpe_ratio":            float,  # annualized (rf=0 assumption)
+            "max_drawdown_pct":        float,  # worst peak-to-trough in %
+            "cumulative_return_pct":   float,  # total compound return in %
+            "best_month_pct":          float,
+            "worst_month_pct":         float,
+            "pct_positive_months":     float,  # % of months with positive return
+            "months_count":            int,
+        }
+    """
+    if not monthly_returns:
+        return None
+
+    n = len(monthly_returns)
+
+    # Cumulative compound return
+    compound = 1.0
+    for r in monthly_returns:
+        compound *= (1.0 + r)
+    cumulative_pct = round((compound - 1.0) * 100, 2)
+
+    # Annualized return (CAGR) — scale to 12 months
+    annualized_return = compound ** (12.0 / n) - 1.0
+    annualized_return_pct = round(annualized_return * 100, 2)
+
+    # Annualized volatility
+    mean_r = sum(monthly_returns) / n
+    variance = sum((r - mean_r) ** 2 for r in monthly_returns) / max(n - 1, 1)
+    monthly_vol = variance ** 0.5
+    annualized_vol = monthly_vol * (12 ** 0.5)
+    annualized_vol_pct = round(annualized_vol * 100, 2)
+
+    # Sharpe ratio (rf=0 — industry convention for hedge fund comparison)
+    sharpe = round(annualized_return / annualized_vol, 2) if annualized_vol > 0 else None
+
+    # Max drawdown
+    peak = 1.0
+    nav = 1.0
+    max_dd = 0.0
+    for r in monthly_returns:
+        nav *= (1.0 + r)
+        if nav > peak:
+            peak = nav
+        dd = (peak - nav) / peak
+        if dd > max_dd:
+            max_dd = dd
+    max_drawdown_pct = round(max_dd * 100, 2)
+
+    # Best / worst month
+    best = max(monthly_returns)
+    worst = min(monthly_returns)
+    pct_positive = sum(1 for r in monthly_returns if r > 0) / n * 100
+
+    return {
+        "annualized_return_pct": annualized_return_pct,
+        "annualized_vol_pct":    annualized_vol_pct,
+        "sharpe_ratio":          sharpe,
+        "max_drawdown_pct":      max_drawdown_pct,
+        "cumulative_return_pct": cumulative_pct,
+        "best_month_pct":        round(best * 100, 2),
+        "worst_month_pct":       round(worst * 100, 2),
+        "pct_positive_months":   round(pct_positive, 1),
+        "months_count":          n,
+    }
+
+
 def _reconcile_nav(beginning_nav_mm: float, ending_nav_mm: float,
                    monthly_returns: list) -> dict:
     """
@@ -1180,6 +1253,9 @@ def load_fund_from_pdf(path: str) -> dict:
             f"Some content may be image-based. Verify extracted returns against source."
         )
 
+    # ── Performance statistics ──────────────────────────────────────────────
+    perf_stats = _compute_performance_stats(returns)
+
     # ── Confidence score ─────────────────────────────────────────────────────
     method_scores = {"table": 1.0, "calendar_text": 0.85, "text": 0.5, "summary": 0.3, "failed": 0.0}
     method_score = method_scores.get(method, 0.0)
@@ -1241,6 +1317,7 @@ def load_fund_from_pdf(path: str) -> dict:
             "low_text_pages":   ocr_info["low_text_pages"],
             "avg_chars_per_page": ocr_info["avg_chars_per_page"],
             "warnings":              warnings,
+            "performance_stats": perf_stats,
             "summary_perf":     summary_perf,
             "reconciliation":   reconciliation,
         },
