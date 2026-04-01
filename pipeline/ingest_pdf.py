@@ -40,6 +40,20 @@ _AUM_LABELS          = ("ending nav", "ending capital", "total nav", "fund aum",
 _BEGINNING_NAV_LABELS = ("beginning nav", "beginning capital", "beginning balance",
                           "opening nav", "opening capital", "opening balance",
                           "beg. nav", "beg nav", "start nav")
+
+# ── Currency detection ───────────────────────────────────────────────────────
+_CURRENCY_SYMBOLS = {
+    "$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY", "CHF": "CHF",
+    "Fr": "CHF", "Fr.": "CHF", "A$": "AUD", "C$": "CAD",
+    "HK$": "HKD", "S$": "SGD", "kr": "SEK",  # also NOK/DKK — ambiguous
+}
+_CURRENCY_CODES = {
+    "USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "HKD", "SGD",
+    "SEK", "NOK", "DKK", "CNY", "KRW", "BRL", "ZAR", "INR", "TWD",
+}
+_CURRENCY_SYMBOL_REGEX = re.compile(
+    r"(?:HK\$|A\$|C\$|S\$|€|£|¥|\$|CHF|Fr\.?)"
+)
 _PERIOD_LABELS       = ("reporting period", "period:", "for the period")
 
 # Expanded header detection — covers most LP report variants
@@ -119,6 +133,103 @@ def _detect_ocr_needed(page_char_counts: list) -> dict:
     }
 
 
+def _detect_currency(text: str) -> dict:
+    """
+    Detect the reporting currency from PDF text.
+
+    Strategy (multi-signal, priority order):
+      1. Explicit labels: "Currency: EUR", "Denominated in GBP", "Base currency: CHF"
+      2. Currency near AUM/NAV labels: "Ending NAV: €1.2B" or "Fund Assets: 850M CHF"
+      3. Symbol frequency: count $, €, £, ¥ occurrences in financial context
+      4. ISO code mentions: count "USD", "EUR", etc. in text
+
+    Returns:
+        {
+            "currency":    str,        # ISO code: "USD", "EUR", etc.
+            "source":      str,        # "explicit_label" | "nav_context" | "symbol_frequency" | "code_frequency" | "default"
+            "confidence":  str,        # "high" | "medium" | "low"
+            "signals":     dict,       # raw signal counts for diagnostics
+        }
+    """
+    text_l = text.lower()
+    signals = {}
+
+    # Signal 1: Explicit currency labels (highest confidence)
+    explicit_patterns = [
+        re.compile(r"(?:base|reporting|fund|denominated)\s+(?:in\s+)?currency\s*:?\s*([A-Z]{3})", re.IGNORECASE),
+        re.compile(r"currency\s*:?\s*([A-Z]{3})", re.IGNORECASE),
+        re.compile(r"denominated\s+in\s+([A-Z]{3})", re.IGNORECASE),
+        re.compile(r"all\s+(?:amounts|figures|values)\s+(?:are\s+)?in\s+([A-Z]{3})", re.IGNORECASE),
+    ]
+    for pat in explicit_patterns:
+        m = pat.search(text)
+        if m:
+            code = m.group(1).upper()
+            if code in _CURRENCY_CODES:
+                return {"currency": code, "source": "explicit_label",
+                        "confidence": "high", "signals": {"explicit": code}}
+
+    # Signal 2: Currency symbols/codes near AUM/NAV labels
+    nav_currencies = {}
+    for line in text.splitlines():
+        line_l = line.lower()
+        if any(lbl in line_l for lbl in _AUM_LABELS + _BEGINNING_NAV_LABELS):
+            # Check for currency symbols
+            for sym, code in _CURRENCY_SYMBOLS.items():
+                if sym in line:
+                    nav_currencies[code] = nav_currencies.get(code, 0) + 2  # weighted
+            # Check for ISO codes
+            for code in _CURRENCY_CODES:
+                if code in line or code.lower() in line_l:
+                    nav_currencies[code] = nav_currencies.get(code, 0) + 2
+
+    if nav_currencies:
+        best = max(nav_currencies, key=nav_currencies.get)
+        signals["nav_context"] = nav_currencies
+        return {"currency": best, "source": "nav_context",
+                "confidence": "high", "signals": signals}
+
+    # Signal 3: Symbol frequency across entire text
+    symbol_counts = {}
+    for sym, code in _CURRENCY_SYMBOLS.items():
+        # Count symbol occurrences near numbers (financial context)
+        pattern = re.compile(re.escape(sym) + r"\s*[\d,]+")
+        count = len(pattern.findall(text))
+        if count > 0:
+            symbol_counts[code] = symbol_counts.get(code, 0) + count
+    signals["symbol_counts"] = symbol_counts
+
+    # Signal 4: ISO code frequency
+    code_counts = {}
+    for code in _CURRENCY_CODES:
+        # Match standalone code (not part of a word)
+        count = len(re.findall(r'\b' + code + r'\b', text))
+        if count > 0:
+            code_counts[code] = count
+    signals["code_counts"] = code_counts
+
+    # Merge signals 3+4
+    merged = {}
+    for code, count in symbol_counts.items():
+        merged[code] = merged.get(code, 0) + count * 2  # symbols weighted more
+    for code, count in code_counts.items():
+        merged[code] = merged.get(code, 0) + count
+
+    if merged:
+        best = max(merged, key=merged.get)
+        # If only $ found → USD (high confidence)
+        # If multiple currencies → take dominant but lower confidence
+        second_best = sorted(merged.values(), reverse=True)[1] if len(merged) > 1 else 0
+        dominance = merged[best] / (merged[best] + second_best) if second_best else 1.0
+        conf = "high" if dominance > 0.8 else "medium"
+        return {"currency": best, "source": "symbol_frequency",
+                "confidence": conf, "signals": signals}
+
+    # Default: USD (most LP reports)
+    return {"currency": "USD", "source": "default",
+            "confidence": "low", "signals": signals}
+
+
 def _find_fund_name(text: str) -> str:
     """Extract fund name from header text."""
     for line in text.splitlines():
@@ -171,22 +282,24 @@ def _find_aum(text: str):
 
     def _try_parse_amount(search_text):
         """Try multiple AUM formats on a text string. Returns value in millions or None."""
-        # Format 1: $X.XXM / $X.XX million
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
+        # Build a regex prefix that matches any known currency symbol
+        _sym = r"(?:HK\$|A\$|C\$|S\$|€|£|¥|\$|CHF\s*|Fr\.?\s*)"
+        # Format 1: [symbol]X.XXM / [symbol]X.XX million
+        m = re.search(_sym + r"([\d,.]+)\s*[Mm](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")), 2)
             except ValueError:
                 pass
-        # Format 2: $X.XXB / $X.XX billion
-        m = re.search(r"\$([\d,.]+)\s*[Bb](?:illion)?", search_text)
+        # Format 2: [symbol]X.XXB / [symbol]X.XX billion
+        m = re.search(_sym + r"([\d,.]+)\s*[Bb](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")) * 1000, 2)
             except ValueError:
                 pass
-        # Format 3: $X,XXX,XXX.XX (standard dollar amount)
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
+        # Format 3: [symbol]X,XXX,XXX.XX (standard amount with currency symbol)
+        m = re.search(_sym + r"([\d,]+(?:\.\d{1,2})?)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -194,8 +307,8 @@ def _find_aum(text: str):
                     return round(val / 1_000_000, 2)
             except ValueError:
                 pass
-        # Format 4: X,XXX,XXX USD
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
+        # Format 4: X,XXX,XXX [CURRENCY_CODE]
+        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:" + "|".join(_CURRENCY_CODES) + r")", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -203,7 +316,21 @@ def _find_aum(text: str):
                     return round(val / 1_000_000, 2)
             except ValueError:
                 pass
-        # Format 5: bare large number (no currency symbol)
+        # Format 5: X.XXM [CURRENCY_CODE] / X.XX million [CURRENCY_CODE]
+        m = re.search(r"([\d,.]+)\s*[Mm](?:illion)?\s*(?:" + "|".join(_CURRENCY_CODES) + r")", search_text)
+        if m:
+            try:
+                return round(float(m.group(1).replace(",", "")), 2)
+            except ValueError:
+                pass
+        # Format 6: X.XXB [CURRENCY_CODE] / X.XX billion [CURRENCY_CODE]
+        m = re.search(r"([\d,.]+)\s*[Bb](?:illion)?\s*(?:" + "|".join(_CURRENCY_CODES) + r")", search_text)
+        if m:
+            try:
+                return round(float(m.group(1).replace(",", "")) * 1000, 2)
+            except ValueError:
+                pass
+        # Format 7: bare large number (no currency symbol) — last resort
         m = re.search(r"(?<!\d)([\d,]{7,}(?:\.\d{1,2})?)(?!\d)", search_text)
         if m:
             try:
@@ -244,13 +371,20 @@ def _find_beginning_nav(text: str):
     lines = text.splitlines()
 
     def _try_parse_amount(search_text):
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
+        _sym = r"(?:HK\$|A\$|C\$|S\$|€|£|¥|\$|CHF\s*|Fr\.?\s*)"
+        m = re.search(_sym + r"([\d,.]+)\s*[Mm](?:illion)?", search_text)
         if m:
             try:
                 return round(float(m.group(1).replace(",", "")), 2)
             except ValueError:
                 pass
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
+        m = re.search(_sym + r"([\d,.]+)\s*[Bb](?:illion)?", search_text)
+        if m:
+            try:
+                return round(float(m.group(1).replace(",", "")) * 1000, 2)
+            except ValueError:
+                pass
+        m = re.search(_sym + r"([\d,]+(?:\.\d{1,2})?)", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -258,7 +392,7 @@ def _find_beginning_nav(text: str):
                     return round(val / 1_000_000, 2)
             except ValueError:
                 pass
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
+        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*(?:" + "|".join(_CURRENCY_CODES) + r")", search_text)
         if m:
             try:
                 val = float(m.group(1).replace(",", ""))
@@ -979,6 +1113,7 @@ def load_fund_from_pdf(path: str) -> dict:
     beginning_nav_mm = _find_beginning_nav(text)
     ticker          = _derive_ticker(fund_name, path)
     fees            = _extract_fees(text)
+    currency_info   = _detect_currency(text)
 
     diagnostics = {}
 
@@ -1064,6 +1199,19 @@ def load_fund_from_pdf(path: str) -> dict:
             f"Some content may be image-based. Verify extracted returns against source."
         )
 
+    # ── Currency warning ──────────────────────────────────────────────────────
+    if currency_info["currency"] != "USD":
+        warnings.append(
+            f"Reporting currency is {currency_info['currency']} (detected via {currency_info['source']}). "
+            f"AUM and NAV values are in {currency_info['currency']}, not USD. "
+            f"Cross-fund comparisons require FX conversion."
+        )
+    if currency_info["confidence"] == "low":
+        warnings.append(
+            "Currency could not be confidently determined — defaulting to USD. "
+            "Verify reporting currency before using AUM figures."
+        )
+
     # ── Confidence score ─────────────────────────────────────────────────────
     method_scores = {"table": 1.0, "calendar_text": 0.85, "text": 0.5, "summary": 0.3, "failed": 0.0}
     method_score = method_scores.get(method, 0.0)
@@ -1079,6 +1227,10 @@ def load_fund_from_pdf(path: str) -> dict:
         return_type_adj = -0.15
     elif return_type == "gross":
         return_type_adj = -0.10  # known gross is less bad than unknown
+    # Currency penalty: low-confidence currency detection is a trust risk
+    currency_adj = 0.0
+    if currency_info["confidence"] == "low":
+        currency_adj = -0.05  # mild: we defaulted to USD, may be wrong
     # OCR penalty: scanned PDFs are fundamentally less trustworthy
     ocr_adj = 0.0
     if ocr_info["ocr_needed"]:
@@ -1088,7 +1240,7 @@ def load_fund_from_pdf(path: str) -> dict:
     confidence = round(
         min(1.0, max(0.0, method_score * 0.4 + completeness_score * 0.5
             + (1.0 - warning_penalty) * 0.1 + reconciliation_adj
-            + return_type_adj + ocr_adj)),
+            + return_type_adj + ocr_adj + currency_adj)),
         3
     )
 
@@ -1098,6 +1250,7 @@ def load_fund_from_pdf(path: str) -> dict:
         "name":              fund_name,
         "aum_mm":            aum_mm,
         "beginning_nav_mm":  beginning_nav_mm,
+        "currency":          currency_info["currency"],
         "mgmt_fee_pct":      fees["mgmt_fee_pct"],
         "incentive_fee_pct": fees["incentive_fee_pct"],
         "raw_returns":       returns,
@@ -1118,6 +1271,9 @@ def load_fund_from_pdf(path: str) -> dict:
             "fee_source":       fees["fee_source"],
             "calendar_year":         diagnostics.get("calendar_text_year_used"),
             "trailing_12_period":    diagnostics.get("calendar_text_trailing_12_period"),
+            "currency":              currency_info["currency"],
+            "currency_source":       currency_info["source"],
+            "currency_confidence":   currency_info["confidence"],
             "ocr_needed":       ocr_info["ocr_needed"],
             "low_text_pages":   ocr_info["low_text_pages"],
             "avg_chars_per_page": ocr_info["avg_chars_per_page"],

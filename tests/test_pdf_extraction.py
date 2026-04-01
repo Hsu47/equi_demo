@@ -7,7 +7,7 @@ Run: pytest tests/test_pdf_extraction.py -v
 import os
 import json
 import pytest
-from pipeline.ingest_pdf import load_fund_from_pdf
+from pipeline.ingest_pdf import load_fund_from_pdf, _detect_currency, _find_aum
 from pipeline.generate_test_pdfs import GROUND_TRUTH, GT_MONTHLY, GT_TRAILING_12
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -242,6 +242,58 @@ class TestEdgeCases:
         result = load_fund_from_pdf(SAMPLE_PDF)
         ext = result["extraction"]
         required = ["method", "confidence", "returns_count", "return_type",
-                     "warnings", "ocr_needed"]
+                     "warnings", "ocr_needed", "currency", "currency_source",
+                     "currency_confidence"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"
+
+
+# ── Currency detection tests ────────────────────────────────────────────────
+
+class TestCurrencyDetection:
+    def test_sample_pdf_is_usd(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        assert result["currency"] == "USD"
+        assert result["extraction"]["currency_confidence"] == "high"
+
+    def test_explicit_eur_label(self):
+        r = _detect_currency("Fund Currency: EUR\nEnding NAV: €1,200,000.00")
+        assert r["currency"] == "EUR"
+        assert r["source"] == "explicit_label"
+        assert r["confidence"] == "high"
+
+    def test_gbp_near_nav(self):
+        r = _detect_currency("Ending NAV: £850,000,000\nMonthly Return: 1.5%")
+        assert r["currency"] == "GBP"
+        assert r["source"] == "nav_context"
+
+    def test_chf_fund_assets(self):
+        r = _detect_currency("Fund Assets: CHF 420,000,000\nPerformance: 2.1%")
+        assert r["currency"] == "CHF"
+
+    def test_jpy_symbol(self):
+        r = _detect_currency("Total Assets: ¥12,500,000,000\nNet Return: 0.8%")
+        assert r["currency"] == "JPY"
+
+    def test_denominated_in_pattern(self):
+        r = _detect_currency("The fund is denominated in GBP. Returns stated after fees.")
+        assert r["currency"] == "GBP"
+        assert r["source"] == "explicit_label"
+
+    def test_no_currency_defaults_usd_low(self):
+        r = _detect_currency("Monthly performance\nJanuary 2.3%\nFebruary -1.1%")
+        assert r["currency"] == "USD"
+        assert r["source"] == "default"
+        assert r["confidence"] == "low"
+
+    def test_eur_aum_parsing(self):
+        val = _find_aum("Fund Assets: €850M\nReporting Period: Q4 2025")
+        assert val == 850.0
+
+    def test_gbp_billion_aum_parsing(self):
+        val = _find_aum("Net Assets: £1.2B\nFund Strategy: Long/Short")
+        assert val == 1200.0
+
+    def test_currency_field_in_output(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        assert "currency" in result, "currency field missing from output"
