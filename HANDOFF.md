@@ -504,3 +504,83 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：什麼情況下 parser 會靜默地把負報酬變成正報酬？
+
+答案：**Parenthetical negatives（括號負數）**。這是 US GAAP 標準格式，基金管理公司（Citco, SS&C, NAV Consulting）常用 `(0.91)%` 代替 `-0.91%`。
+
+驗證後確認兩種失敗模式：
+1. **Text/calendar_text method**：`_RETURN_PATTERN` 匹配到括號內的 `0.91` → 解析為 **+0.91**（正數）
+2. **Table method**：`_normalize_cell("(0.91)")` 不處理括號 → `float()` 拋 ValueError → 負月份**靜默丟失**
+
+災難性後果：
+- 模式 1：所有負月份變正月份 → 基金看起來從不虧損 → LP 嚴重高估績效
+- 模式 2：只剩正月份（6-8 個）→ 看起來像「資料不完整」而非「資料錯誤」
+- 兩種模式都不會產生 warning，confidence 可能高達 1.0
+- 數字完全合理（+0.91% 是正常月報酬），不會引起懷疑
+
+### DEV
+修改 4 個解析路徑，確保括號負數在所有方法中都被正確處理：
+
+1. `_RETURN_PATTERN`：新增括號負數的替代匹配組 `\((\d{1,3}\.\d{1,4})\)\s*%?`
+2. `_parse_return_match(m)`：新增 helper，從兩組匹配中提取正確的正負值
+3. `_normalize_cell(cell)`：新增 `(X.XX)` → `-X.XX` 轉換
+4. `_pct_pattern`（calendar_text）：同樣新增括號負數匹配
+5. `_extract_summary_performance`：factsheet 格式的 % 匹配也修復
+6. `_extract_fees`：修復 "Incentive Fee: X%" 格式的匹配（加 `:?`）
+
+新增 Format E 測試 PDF（Blackstone Credit Strategies Fund LP）：
+- 使用 `(0.91)%` 格式的括號負數
+- 7 個測試案例（returns、negative_are_negative、AUM、return_type、confidence、NAV reconciliation、fees）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**43/43 tests PASSED** (2.16 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Confidence | Method | Notes |
+|-----|---------|-----|------------|--------|-------|
+| sample_lp_report.pdf | 12/12 exact ✓ | 2.66 ✓ | 1.0 | table | No regression |
+| format_a (AQR factsheet) | 12/12 exact ✓ | 850.0 ✓ | 0.94 | calendar_text | No regression |
+| format_b (ambiguous headers) | 12/12 exact ✓ | 450.41 ✓ | 1.0 | table | No regression |
+| format_c (gross + net cols) | 12/12 exact ✓ | 1200.0 ✓ | 1.0 | table | No regression |
+| format_d (calendar grid) | 12/12 exact ✓ | 3200.0 ✓ | 0.94 | calendar_text | No regression |
+| **format_e (parenthetical neg)** | **12/12 exact ✓** | **579.09 ✓** | **1.0** | **table** | **NEW — all negatives correct** |
+
+前後比較（Format E — 括號負數）：
+
+| | 舊行為（修復前） | 新行為（修復後） |
+|---|--------|--------|
+| `(0.45)%` | +0.45%（靜默正數！）或被丟棄 | -0.45%（正確）|
+| `(1.33)%` | +1.33%（靜默正數！）或被丟棄 | -1.33%（正確）|
+| `(0.22)%` | +0.22%（靜默正數！）或被丟棄 | -0.22%（正確）|
+| `(0.56)%` | +0.56%（靜默正數！）或被丟棄 | -0.56%（正確）|
+| 年化報酬影響 | ~+12% annualized（虛高） | ~+7% annualized（正確）|
+
+LP 視角評估：
+- 這修復了最危險的靜默錯誤之一：負報酬變正報酬
+- 基金管理公司的資本帳戶報告大量使用括號負數格式
+- 修復前，一個 long/short 基金可能看起來「從不虧損」— 年化報酬虛高 ~5%
+- 現在 6 種 PDF 格式 + 43 個自動化測試覆蓋了所有已知的靜默錯誤路徑
+- NAV reconciliation 自動驗算也確認了正確性（delta = 0.0%）
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**多幣別靜默誤判**：
+- 目前所有 AUM 解析假設 USD
+- 如果 LP 報告是 EUR 或 GBP 計價，`$` 符號可能不存在
+- Parser 可能抓到 EUR 金額但標記為 USD，或完全錯過
+- 更危險的：歐洲格式用逗號當小數點（`1.234,56` 而非 `1,234.56`）
+  這會讓 AUM 解析完全失敗或給出錯誤數字
+
+或者 demo 導向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API
+- **v2.5: Format Registry** — 記住 GP 格式指紋
+- **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較
