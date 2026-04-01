@@ -62,6 +62,13 @@ GROUND_TRUTH = {
         "beginning_nav_mm": 540.0,
         "return_type": "net",
     },
+    "format_f_eur_currency.pdf": {
+        "monthly_returns": GT_MONTHLY,
+        "aum_mm": 720.0,
+        "beginning_nav_mm": 680.0,
+        "currency": "EUR",
+        "return_type": "net",
+    },
 }
 
 
@@ -401,6 +408,88 @@ def build_format_e():
     print(f"  ✓ Format E (parenthetical negatives): {path}")
 
 
+# ── Format F: EUR-denominated fund (European currency) ──────────────────────
+
+def build_format_f():
+    """
+    European fund using EUR currency throughout.
+    Tests multi-currency parsing: € symbol, EUR suffix, and European number format.
+    Parser must detect currency as EUR and correctly parse €-denominated amounts.
+    """
+    path = os.path.join(OUTPUT_DIR, "format_f_eur_currency.pdf")
+    doc = SimpleDocTemplate(path, pagesize=letter,
+                            rightMargin=0.75*inch, leftMargin=0.75*inch,
+                            topMargin=0.75*inch, bottomMargin=0.6*inch)
+    st = _styles()
+    story = []
+
+    story.append(Paragraph("Amundi European Credit Opportunities Fund", st["title"]))
+    story.append(Paragraph("Quarterly Report — Q4 2025", st["sub"]))
+    story.append(Paragraph("Amundi Asset Management | Paris, France", st["sub"]))
+    story.append(Spacer(1, 0.15*inch))
+
+    # Fund overview with EUR
+    story.append(Paragraph("Fund Overview", st["section"]))
+    overview = [
+        ["Fund Size", "€720,000,000", "Strategy", "European Credit L/S"],
+        ["Share Class", "EUR Institutional", "Liquidity", "Monthly"],
+        ["Management Fee", "1.25%", "Incentive Fee", "12.5%"],
+        ["Currency", "EUR", "Benchmark", "Euro STOXX 50"],
+    ]
+    t = Table(overview, colWidths=[1.3*inch, 1.5*inch, 1.3*inch, 2.2*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#666")),
+        ("TEXTCOLOR", (2, 0), (2, -1), colors.HexColor("#666")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Capital account in EUR
+    beginning_nav = 680_000_000
+    compound = 1.0
+    for r in GT_MONTHLY:
+        compound *= (1 + r / 100)
+    ending_nav = round(beginning_nav * compound)
+    story.append(Paragraph("Capital Account Summary", st["section"]))
+    cap = [
+        ["Beginning NAV (Jan 1, 2025)", f"€{beginning_nav:,.0f}"],
+        ["Ending NAV (Dec 31, 2025)", f"€{ending_nav:,.0f}"],
+        ["Total Net Assets", "€720,000,000"],
+    ]
+    t = Table(cap, colWidths=[4*inch, 2.5*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Monthly returns table
+    story.append(Paragraph("Monthly Net Performance (%)", st["section"]))
+    header = ["Month", "Net Return (%)", "Cumulative"]
+    rows = [header]
+    cum = 100.0
+    for i, r in enumerate(GT_MONTHLY):
+        cum *= (1 + r / 100)
+        month_name = f"{GT_MONTHS[i]} 2025"
+        rows.append([month_name, f"{r:+.2f}%", f"{cum:.2f}"])
+    t = Table(rows, colWidths=[2*inch, 1.5*inch, 1.5*inch])
+    t.setStyle(_table_style_basic())
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph(
+        "All values denominated in EUR. Performance is net of all management fees "
+        "and incentive allocations. Past performance is not indicative of future results.",
+        st["disc"]))
+    doc.build(story)
+    print(f"  ✓ Format F (EUR currency): {path}")
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating test PDFs...")
@@ -409,6 +498,7 @@ def main():
     build_format_c()
     build_format_d()
     build_format_e()
+    build_format_f()
     print(f"\nGround truth for validation:")
     for name, gt in GROUND_TRUTH.items():
         print(f"  {name}: {len(gt['monthly_returns'])} months, AUM={gt.get('aum_mm')}")

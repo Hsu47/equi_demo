@@ -48,6 +48,13 @@ _AUM_LABELS          = ("ending nav", "ending capital", "total nav", "fund aum",
 _BEGINNING_NAV_LABELS = ("beginning nav", "beginning capital", "beginning balance",
                           "opening nav", "opening capital", "opening balance",
                           "beg. nav", "beg nav", "start nav")
+
+# ── Multi-currency support ──────────────────────────────────────────────────
+# Maps currency symbols and ISO codes to a canonical code
+_CURRENCY_SYMBOLS = {"$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY", "CHF": "CHF"}
+_CURRENCY_CODES   = {"USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "SEK", "NOK", "DKK", "SGD", "HKD"}
+# JPY amounts are not divided by 1M the same way — ¥100M = $0.7M roughly
+_JPY_DIVISOR = 100_000_000  # Japanese convention: 億 (oku) = 100M yen
 _PERIOD_LABELS       = ("reporting period", "period:", "for the period")
 
 # Expanded header detection — covers most LP report variants
@@ -164,126 +171,180 @@ def _derive_ticker(fund_name: str, file_path: str) -> str:
     return os.path.splitext(os.path.basename(file_path))[0].upper()[:8]
 
 
+def _normalize_number(num_str: str, european_format: bool = False) -> float:
+    """
+    Parse a number string, handling both US and European formats.
+    US:       1,234,567.89  (comma = thousands, period = decimal)
+    European: 1.234.567,89  (period = thousands, comma = decimal)
+    """
+    s = num_str.strip()
+    if european_format:
+        # European: dots are thousands separators, comma is decimal
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        # US: commas are thousands separators
+        s = s.replace(",", "")
+    return float(s)
+
+
+def _detect_european_format(num_str: str) -> bool:
+    """
+    Heuristic: detect European number format.
+    European: "1.234.567,89" or "850.000,00" (period groups of 3, comma before decimals)
+    US:       "1,234,567.89" or "850,000.00"
+    """
+    # If comma appears after the last period → likely European (e.g. "1.234,56")
+    last_comma = num_str.rfind(",")
+    last_period = num_str.rfind(".")
+    if last_comma > last_period and last_comma > 0:
+        # Check that digits after comma are 1-2 (decimal) not 3+ (thousands)
+        after_comma = num_str[last_comma + 1:]
+        if len(after_comma) <= 2 and after_comma.isdigit():
+            return True
+    return False
+
+
+def _try_parse_amount(search_text: str, currency_hint: str = None):
+    """
+    Try multiple AUM formats on a text string.
+    Returns (value_in_millions, currency_code) or (None, None).
+    Supports: $, €, £, ¥ symbols and USD/EUR/GBP/JPY/CHF suffixes.
+    """
+    # Build symbol pattern: $, €, £, ¥
+    sym_pat = r"[\$€£¥]"
+
+    # Format 1: {symbol}X.XXM / {symbol}X.XX million
+    m = re.search(sym_pat + r"([\d,.\s]+?)\s*[Mm](?:illion)?", search_text)
+    if m:
+        sym = search_text[m.start()]
+        currency = _CURRENCY_SYMBOLS.get(sym, currency_hint or "USD")
+        try:
+            val = _normalize_number(m.group(1))
+            return round(val, 2), currency
+        except ValueError:
+            pass
+
+    # Format 2: {symbol}X.XXB / {symbol}X.XX billion
+    m = re.search(sym_pat + r"([\d,.\s]+?)\s*[Bb](?:illion)?", search_text)
+    if m:
+        sym = search_text[m.start()]
+        currency = _CURRENCY_SYMBOLS.get(sym, currency_hint or "USD")
+        try:
+            val = _normalize_number(m.group(1)) * 1000
+            return round(val, 2), currency
+        except ValueError:
+            pass
+
+    # Format 3: {symbol}X,XXX,XXX.XX or €X.XXX.XXX,XX (standard full amount)
+    m = re.search(sym_pat + r"([\d,.]+)", search_text)
+    if m:
+        sym = search_text[m.start()]
+        currency = _CURRENCY_SYMBOLS.get(sym, currency_hint or "USD")
+        num_s = m.group(1)
+        try:
+            is_euro_fmt = _detect_european_format(num_s)
+            val = _normalize_number(num_s, european_format=is_euro_fmt)
+            if val > 100_000:
+                divisor = 1_000_000
+                return round(val / divisor, 2), currency
+        except ValueError:
+            pass
+
+    # Format 4: X,XXX,XXX {CODE} (e.g. "850,000,000 EUR")
+    for code in _CURRENCY_CODES:
+        m = re.search(r"([\d,.]+)\s*" + code + r"\b", search_text)
+        if m:
+            num_s = m.group(1)
+            try:
+                is_euro_fmt = _detect_european_format(num_s)
+                val = _normalize_number(num_s, european_format=is_euro_fmt)
+                if val > 100_000:
+                    return round(val / 1_000_000, 2), code
+            except ValueError:
+                pass
+
+    # Format 5: X.XX M€ / X.XX M£ (European shorthand: "850 M€")
+    m = re.search(r"([\d,.\s]+?)\s*[Mm]\s*([€£¥])", search_text)
+    if m:
+        sym = m.group(2)
+        currency = _CURRENCY_SYMBOLS.get(sym, "USD")
+        try:
+            val = _normalize_number(m.group(1))
+            return round(val, 2), currency
+        except ValueError:
+            pass
+
+    # Format 6: {CODE} X,XXX,XXX (prefix code: "EUR 850,000,000")
+    for code in _CURRENCY_CODES:
+        m = re.search(code + r"\s+([\d,.]+)", search_text)
+        if m:
+            num_s = m.group(1)
+            try:
+                is_euro_fmt = _detect_european_format(num_s)
+                val = _normalize_number(num_s, european_format=is_euro_fmt)
+                if val > 100_000:
+                    return round(val / 1_000_000, 2), code
+            except ValueError:
+                pass
+
+    # Format 7: bare large number (no currency symbol) — fallback
+    m = re.search(r"(?<!\d)([\d,]{7,}(?:\.\d{1,2})?)(?!\d)", search_text)
+    if m:
+        try:
+            val = _normalize_number(m.group(1))
+            if val > 100_000:
+                return round(val / 1_000_000, 2), currency_hint or "USD"
+        except ValueError:
+            pass
+    return None, None
+
+
 def _find_aum(text: str):
     """
     Extract ending NAV / AUM from text.
-    Handles:
-      - "$2,660,284.00"  (standard)
-      - "$2.66M" / "$2.66 million"  (abbreviated)
-      - "$2.66B" / "$2.66 billion"  (abbreviated)
-      - "2,660,284 USD"  (no $ prefix, USD suffix)
-      - "NAV: 2,660,284"  (bare number on same or next line)
-      - Line-continuation where $ amount is on the next line
+    Handles multiple currencies ($, €, £, ¥) and number formats (US, European).
+    Returns (aum_in_millions, currency_code) or (None, None).
     """
     lines = text.splitlines()
-
-    def _try_parse_amount(search_text):
-        """Try multiple AUM formats on a text string. Returns value in millions or None."""
-        # Format 1: $X.XXM / $X.XX million
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
-        if m:
-            try:
-                return round(float(m.group(1).replace(",", "")), 2)
-            except ValueError:
-                pass
-        # Format 2: $X.XXB / $X.XX billion
-        m = re.search(r"\$([\d,.]+)\s*[Bb](?:illion)?", search_text)
-        if m:
-            try:
-                return round(float(m.group(1).replace(",", "")) * 1000, 2)
-            except ValueError:
-                pass
-        # Format 3: $X,XXX,XXX.XX (standard dollar amount)
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        # Format 4: X,XXX,XXX USD
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        # Format 5: bare large number (no currency symbol)
-        m = re.search(r"(?<!\d)([\d,]{7,}(?:\.\d{1,2})?)(?!\d)", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        return None
 
     for i, line in enumerate(lines):
         line_l = line.lower()
         if any(lbl in line_l for lbl in _AUM_LABELS):
             # Try current line
-            result = _try_parse_amount(line)
+            result, currency = _try_parse_amount(line)
             if result is not None:
-                return result
+                return result, currency
             # Try next line (line-continuation from pdfplumber)
             if i + 1 < len(lines):
-                result = _try_parse_amount(lines[i + 1])
+                result, currency = _try_parse_amount(lines[i + 1])
                 if result is not None:
-                    return result
-            # Try: label line ends with $ and amount is at start of next line
-            if line.rstrip().endswith("$") and i + 1 < len(lines):
+                    return result, currency
+            # Try: label line ends with currency symbol and amount is at start of next line
+            if line.rstrip()[-1:] in ("$", "€", "£", "¥") and i + 1 < len(lines):
+                sym = line.rstrip()[-1]
                 m = re.search(r"^([\d,]+(?:\.\d{2})?)", lines[i + 1].strip())
                 if m:
                     try:
                         val = float(m.group(1).replace(",", ""))
                         if val > 100_000:
-                            return round(val / 1_000_000, 2)
+                            return round(val / 1_000_000, 2), _CURRENCY_SYMBOLS.get(sym, "USD")
                     except ValueError:
                         pass
-    return None
+    return None, None
 
 
 def _find_beginning_nav(text: str):
-    """Extract beginning NAV using same multi-format logic as _find_aum."""
+    """Extract beginning NAV using same multi-currency logic as _find_aum."""
     lines = text.splitlines()
-
-    def _try_parse_amount(search_text):
-        m = re.search(r"\$([\d,.]+)\s*[Mm](?:illion)?", search_text)
-        if m:
-            try:
-                return round(float(m.group(1).replace(",", "")), 2)
-            except ValueError:
-                pass
-        m = re.search(r"\$([\d,]+(?:\.\d{1,2})?)", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        m = re.search(r"([\d,]+(?:\.\d{1,2})?)\s*USD", search_text)
-        if m:
-            try:
-                val = float(m.group(1).replace(",", ""))
-                if val > 100_000:
-                    return round(val / 1_000_000, 2)
-            except ValueError:
-                pass
-        return None
 
     for i, line in enumerate(lines):
         line_l = line.lower()
         if any(lbl in line_l for lbl in _BEGINNING_NAV_LABELS):
-            result = _try_parse_amount(line)
+            result, _ = _try_parse_amount(line)
             if result is not None:
                 return result
             if i + 1 < len(lines):
-                result = _try_parse_amount(lines[i + 1])
+                result, _ = _try_parse_amount(lines[i + 1])
                 if result is not None:
                     return result
     return None
@@ -996,7 +1057,7 @@ def load_fund_from_pdf(path: str) -> dict:
     ocr_info = _detect_ocr_needed(page_char_counts)
 
     fund_name       = _find_fund_name(text)
-    aum_mm          = _find_aum(text)
+    aum_mm, currency = _find_aum(text)
     beginning_nav_mm = _find_beginning_nav(text)
     ticker          = _derive_ticker(fund_name, path)
     fees            = _extract_fees(text)
@@ -1119,6 +1180,7 @@ def load_fund_from_pdf(path: str) -> dict:
         "name":              fund_name,
         "aum_mm":            aum_mm,
         "beginning_nav_mm":  beginning_nav_mm,
+        "currency":          currency or "USD",
         "mgmt_fee_pct":      fees["mgmt_fee_pct"],
         "incentive_fee_pct": fees["incentive_fee_pct"],
         "raw_returns":       returns,

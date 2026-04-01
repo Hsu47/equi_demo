@@ -260,6 +260,48 @@ class TestFormatE:
         assert self.result["incentive_fee_pct"] == 15.0
 
 
+class TestFormatF:
+    """Format F: EUR-denominated fund — multi-currency detection."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, ensure_test_pdfs):
+        self.gt = GROUND_TRUTH["format_f_eur_currency.pdf"]
+        self.result = _load_test_pdf("format_f_eur_currency.pdf")
+        self.ext = self.result["extraction"]
+
+    def test_returns_exact_match(self):
+        expected = [r / 100 for r in self.gt["monthly_returns"]]
+        actual = self.result["raw_returns"]
+        assert len(actual) == 12
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            assert abs(a - e) < 1e-6, f"Month {i+1}: {a} != {e}"
+
+    def test_currency_is_eur(self):
+        """Must detect EUR currency from € symbol."""
+        assert self.result["currency"] == "EUR"
+
+    def test_aum(self):
+        assert self.result["aum_mm"] == self.gt["aum_mm"]
+
+    def test_beginning_nav(self):
+        assert self.result["beginning_nav_mm"] == self.gt["beginning_nav_mm"]
+
+    def test_return_type(self):
+        assert self.ext["return_type"] == "net"
+
+    def test_confidence(self):
+        assert self.ext["confidence"] >= 0.95
+
+    def test_nav_reconciliation(self):
+        rec = self.ext["reconciliation"]
+        assert rec is not None
+        assert rec["reconciled"] is True
+
+    def test_fees(self):
+        assert self.result["mgmt_fee_pct"] == 1.25
+        assert self.result["incentive_fee_pct"] == 12.5
+
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 class TestEdgeCases:
@@ -280,7 +322,7 @@ class TestEdgeCases:
     def test_required_fields_present(self):
         result = load_fund_from_pdf(SAMPLE_PDF)
         required = ["fund_id", "ticker", "name", "aum_mm", "raw_returns",
-                     "source_format", "source_path", "extraction"]
+                     "source_format", "source_path", "extraction", "currency"]
         for field in required:
             assert field in result, f"Missing required field: {field}"
 
