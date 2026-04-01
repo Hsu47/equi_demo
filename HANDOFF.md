@@ -504,3 +504,95 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：什麼情況下 parser 會靜默給出**系統性偏差**的數據（不只是不完整，而是方向性錯誤）？
+
+答案：**會計式負號 `(0.91)` 代替 `-0.91`**。
+
+這是金融界最常見的負數表示法——Citco、SS&C、NAV Consulting 等主要基金行政管理人，以及四大會計師事務所的審計報告，都使用括號表示負數。我們的 parser 在三個位置完全無法解析這個格式：
+
+1. `_normalize_cell()` — 表格提取路徑，`float("(0.91)")` 直接失敗
+2. `_RETURN_PATTERN` — 文字提取路徑，regex 不匹配 `(0.91)`
+3. `_pct_pattern` — 日曆格式路徑，同樣不匹配
+
+**後果比「缺少數據」更危險**：
+- 所有負數月份被靜默丟棄 → 只剩正數月份
+- LP 看到 8-10 個月的正報酬，合理範圍內，沒有 warning
+- 系統性正偏差 → 高估基金表現 → 錯誤的配置決策
+- confidence 只降一點（completeness_score 稍低），但不會觸發任何警報
+
+這是教科書級的「看起來對但方向性錯誤」的靜默數據汙染。
+
+### DEV
+三處修改 + 一個新測試格式：
+
+**Parser 修改**：
+- `_normalize_cell()`：新增 `re.match(r"^\((\d+(?:\.\d+)?)\)$", s)` → 轉換為 `-X.XX`
+- `_RETURN_PATTERN`：新增第二個捕獲組 `\((\d{1,3}\.\d{1,4})\)\s*%?`，在 `_extract_monthly_returns_from_text()` 中判斷 `group(2)` 取負值
+- `_pct_pattern`：同樣新增會計負號組，在 `_extract_calendar_text_format()` 中解包 `(grp1, grp2)` tuple
+
+**測試新增**：
+- `build_format_e()`：模擬 Citco 基金行政管理人報告，使用 `(0.45)%` 格式
+- `TestFormatE`：6 個測試案例（exact match、has_negative_returns、AUM、return_type、confidence、method）
+- 測試套件從 36 → 42 個測試
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**42/42 tests PASSED** (2.37 seconds)
+
+Format E 測試結果：
+
+| Check | Result |
+|-------|--------|
+| 12 monthly returns exact match | 12/12 ✓ |
+| Negative months present (>=3) | 4 negatives found ✓ |
+| AUM = 680.0 | Correct ✓ |
+| return_type = "net" | Correct ✓ |
+| Confidence >= 0.95 | Correct ✓ |
+| Method = "table" | Correct ✓ |
+
+前後比較（假設有一份使用會計負號的 PDF）：
+
+| 指標 | 修復前 | 修復後 |
+|------|--------|--------|
+| 12 months 中的負數月份 | 0（全部丟棄） | 4（正確保留） |
+| 看到的平均月報酬 | +1.16%（只有正月份） | +0.51%（真實平均） |
+| 年化報酬估計 | ~14.8%（嚴重高估） | ~6.3%（正確） |
+| Warning | None（靜默！） | None（數據正確，不需要） |
+| Confidence | ~0.83（只因 completeness 降） | 1.0（全部正確） |
+
+LP 視角評估：
+- 修復前的 +14.8% vs 修復後的 +6.3% — 差距 8.5%，足以影響配置決策
+- 這是**最危險的一類靜默錯誤**：數據看起來合理，但有方向性偏差
+- 現在 6 種 PDF 格式 + 42 個自動化測試覆蓋所有已知的負號表示法
+
+全格式回歸：
+
+| PDF | Returns | AUM | Confidence | Regression |
+|-----|---------|-----|------------|-----------|
+| sample_lp_report.pdf | 12/12 ✓ | 2.66 ✓ | 1.0 | None |
+| Format A (AQR) | 12/12 ✓ | 850.0 ✓ | 0.94 | None |
+| Format B (ambiguous) | 12/12 ✓ | 450.41 ✓ | 1.0 | None |
+| Format C (gross+net) | 12/12 ✓ | 1200.0 ✓ | 1.0 | None |
+| Format D (calendar) | 12/12 ✓ | 3200.0 ✓ | 0.94 | None |
+| Format E (acct neg) | 12/12 ✓ | 680.0 ✓ | 1.0 | **NEW** |
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**多幣別混淆（silent currency mismatch）**：
+- 目前我們假設所有數據都是 USD，沒有任何幣別標記
+- 如果 LP 報告以 EUR 計價，我們抓到的 AUM 和 returns 都是 EUR
+- LP 分析師把它跟其他 USD 基金直接比較 → 蘋果比橘子
+- 解法：偵測幣別標籤（$, €, £, ¥, USD, EUR, GBP），加入 `currency` 欄位
+- 如果幣別不明 → confidence 降低 + warning
+
+其他方向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
+- **benchmark 提取** — 相對績效比較的基礎
