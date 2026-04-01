@@ -8,6 +8,8 @@ Formats covered:
   C. Gross + Net side by side: two return columns, parser must pick net
   D. Multi-year calendar grid (Winton-style): rows=years, cols=months
      with partial current year (tests trailing-12 logic)
+  E. Parenthetical negatives (US GAAP / fund admin style)
+  F. EUR-denominated fund — tests multi-currency detection
 """
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -60,6 +62,12 @@ GROUND_TRUTH = {
         "monthly_returns": GT_MONTHLY,  # same returns, but negatives use (X.XX) format
         "aum_mm": 579.09,  # ending NAV (beginning $540M * compound returns)
         "beginning_nav_mm": 540.0,
+        "return_type": "net",
+    },
+    "format_f_eur_currency.pdf": {
+        "monthly_returns": GT_MONTHLY,
+        "aum_mm": 680.0,
+        "currency": "EUR",
         "return_type": "net",
     },
 }
@@ -401,6 +409,81 @@ def build_format_e():
     print(f"  ✓ Format E (parenthetical negatives): {path}")
 
 
+# ── Format F: EUR-denominated fund ────────────────────────────────────────────
+
+def build_format_f():
+    """
+    European fund LP report denominated in EUR.
+    Uses € symbol and "EUR" code — parser must detect non-USD currency
+    and flag it for the LP analyst doing portfolio-level aggregation.
+    """
+    path = os.path.join(OUTPUT_DIR, "format_f_eur_currency.pdf")
+    doc = SimpleDocTemplate(path, pagesize=letter,
+                            rightMargin=0.75*inch, leftMargin=0.75*inch,
+                            topMargin=0.75*inch, bottomMargin=0.6*inch)
+    st = _styles()
+    story = []
+
+    story.append(Paragraph("Nordica European Credit Fund SICAV", st["title"]))
+    story.append(Paragraph("Investor Report — December 2025", st["sub"]))
+    story.append(Paragraph("Nordica Asset Management GmbH | Luxembourg", st["sub"]))
+    story.append(Spacer(1, 0.15*inch))
+
+    # Fund overview with EUR
+    story.append(Paragraph("Fund Overview", st["section"]))
+    overview = [
+        ["Fund Assets (NAV)", "€680,000,000", "Strategy", "European Credit L/S"],
+        ["Share Class Currency", "EUR", "Inception", "June 2017"],
+        ["Management Fee", "1.25%", "Performance Fee", "12.5%"],
+        ["Domicile", "Luxembourg SICAV", "Liquidity", "Monthly"],
+    ]
+    t = Table(overview, colWidths=[1.5*inch, 1.5*inch, 1.3*inch, 2.2*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#666")),
+        ("TEXTCOLOR", (2, 0), (2, -1), colors.HexColor("#666")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Monthly returns
+    story.append(Paragraph("Monthly Net Performance (%)", st["section"]))
+    header = ["Month", "Net Return (%)", "Benchmark (Euro Stoxx 50)"]
+    rows = [header]
+    for i, r in enumerate(GT_MONTHLY):
+        month_name = f"{GT_MONTHS[i]} 2025"
+        bench = round(r * 0.6 + 0.12, 2)
+        rows.append([month_name, f"{r:+.2f}%", f"{bench:+.2f}%"])
+    t = Table(rows, colWidths=[2*inch, 1.5*inch, 2*inch])
+    t.setStyle(_table_style_basic())
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Ending NAV in EUR
+    story.append(Paragraph("Capital Account (EUR)", st["section"]))
+    cap = [
+        ["Ending NAV", "€680,000,000"],
+        ["Net Assets Under Management", "€680M"],
+    ]
+    t = Table(cap, colWidths=[4*inch, 2.5*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.15*inch))
+
+    story.append(Paragraph(
+        "All figures are denominated in EUR. Returns are net of management fees "
+        "and performance allocation. This fund is regulated by CSSF Luxembourg.",
+        st["disc"]))
+    doc.build(story)
+    print(f"  ✓ Format F (EUR currency): {path}")
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating test PDFs...")
@@ -409,6 +492,7 @@ def main():
     build_format_c()
     build_format_d()
     build_format_e()
+    build_format_f()
     print(f"\nGround truth for validation:")
     for name, gt in GROUND_TRUTH.items():
         print(f"  {name}: {len(gt['monthly_returns'])} months, AUM={gt.get('aum_mm')}")

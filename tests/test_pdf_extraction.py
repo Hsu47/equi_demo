@@ -260,6 +260,68 @@ class TestFormatE:
         assert self.result["incentive_fee_pct"] == 15.0
 
 
+class TestFormatF:
+    """Format F: EUR-denominated fund — currency detection."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, ensure_test_pdfs):
+        self.gt = GROUND_TRUTH["format_f_eur_currency.pdf"]
+        self.result = _load_test_pdf("format_f_eur_currency.pdf")
+        self.ext = self.result["extraction"]
+
+    def test_returns_exact_match(self):
+        expected = [r / 100 for r in self.gt["monthly_returns"]]
+        actual = self.result["raw_returns"]
+        assert len(actual) == 12
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            assert abs(a - e) < 1e-6, f"Month {i+1}: {a} != {e}"
+
+    def test_aum(self):
+        assert self.result["aum_mm"] == self.gt["aum_mm"]
+
+    def test_currency_is_eur(self):
+        """Critical: must detect EUR, not default to USD."""
+        assert self.result["currency"] == "EUR"
+
+    def test_currency_confidence(self):
+        assert self.ext["currency_confidence"] == "high"
+
+    def test_has_currency_warning(self):
+        """Non-USD currency must produce a warning for LP aggregation."""
+        assert any("EUR" in w and "Non-USD" in w for w in self.ext["warnings"])
+
+    def test_return_type(self):
+        assert self.ext["return_type"] == "net"
+
+    def test_confidence_reasonable(self):
+        """EUR fund: confidence slightly lower due to non-USD penalty."""
+        assert 0.85 <= self.ext["confidence"] <= 1.0
+
+    def test_fees(self):
+        assert self.result["mgmt_fee_pct"] == 1.25
+        assert self.result["incentive_fee_pct"] == 12.5
+
+
+# ── Sample PDF currency test ───────────────────────────────────────────────
+
+class TestSamplePdfCurrency:
+    """Verify sample PDF is detected as USD (not falsely flagged as other currency)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.result = load_fund_from_pdf(SAMPLE_PDF)
+        self.ext = self.result["extraction"]
+
+    def test_currency_is_usd(self):
+        assert self.result["currency"] == "USD"
+
+    def test_no_currency_warning(self):
+        assert not any("Non-USD" in w for w in self.ext["warnings"])
+
+    def test_currency_confidence_high(self):
+        assert self.ext["currency_confidence"] == "high"
+
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 class TestEdgeCases:
@@ -279,8 +341,8 @@ class TestEdgeCases:
 
     def test_required_fields_present(self):
         result = load_fund_from_pdf(SAMPLE_PDF)
-        required = ["fund_id", "ticker", "name", "aum_mm", "raw_returns",
-                     "source_format", "source_path", "extraction"]
+        required = ["fund_id", "ticker", "name", "aum_mm", "currency",
+                     "raw_returns", "source_format", "source_path", "extraction"]
         for field in required:
             assert field in result, f"Missing required field: {field}"
 
@@ -288,6 +350,6 @@ class TestEdgeCases:
         result = load_fund_from_pdf(SAMPLE_PDF)
         ext = result["extraction"]
         required = ["method", "confidence", "returns_count", "return_type",
-                     "warnings", "ocr_needed"]
+                     "currency", "currency_confidence", "warnings", "ocr_needed"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"
