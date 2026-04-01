@@ -445,7 +445,20 @@
       Our parser extracts, cross-validates, and tells you how much to trust the result. Click below to see it live on a real LP statement.
       &nbsp;·&nbsp; <a href="/static/sample_lp_report.pdf" target="_blank" style="color:var(--accent);font-size:0.75rem">view source PDF ↗</a>
     </p>
-    <button class="pdf-btn" id="pdf-parse-btn" onclick="runPdfDemo()">▶ Parse LP Report PDF</button>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <select id="pdf-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 12px;font-size:0.8rem;min-width:280px;cursor:pointer" onchange="updatePdfDescription()">
+        <option value="sample">Standard LP Report — Meridian Global Macro</option>
+        <option value="format_a">Format A — AQR-style Factsheet (calendar grid)</option>
+        <option value="format_b">Format B — Ambiguous Headers ("Return" not "Net Return")</option>
+        <option value="format_c">Format C — Gross + Net Side-by-Side</option>
+        <option value="format_d">Format D — Multi-Year Calendar Grid (trailing 12)</option>
+        <option value="format_e">Format E — Parenthetical Negatives (US GAAP)</option>
+        <option value="format_f">Format F — EUR-Denominated European Fund</option>
+        <option value="format_g">Format G — European Comma Decimals (1,23%)</option>
+      </select>
+      <button class="pdf-btn" id="pdf-parse-btn" onclick="runPdfDemo()">▶ Parse</button>
+    </div>
+    <div id="pdf-desc" style="font-size:0.72rem;color:var(--muted);margin-top:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;line-height:1.6"></div>
 
     <div class="pdf-result" id="pdf-result">
       <div style="font-size:0.8rem;margin-bottom:14px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px" id="pdf-meta"></div>
@@ -463,8 +476,8 @@
       <p style="font-size:0.7rem;color:var(--muted);margin-top:18px;line-height:1.6">
         <strong style="color:var(--text)">How it works:</strong>
         Multi-strategy parser (table → calendar grid → text scan) with NAV reconciliation cross-check.
-        Supports 7 format variants, multi-currency (USD/EUR/GBP/JPY), parenthetical negatives, and fee structure extraction.
-        55 automated tests — built as a proof-of-concept for the Wk 1–3 roadmap item above.
+        Supports 8 format variants, multi-currency (USD/EUR/GBP/JPY), European comma decimals, parenthetical negatives, and fee structure extraction.
+        64 automated tests — built as a proof-of-concept for the Wk 1–3 roadmap item above.
       </p>
     </div>
   </div>
@@ -1043,18 +1056,36 @@ fetch('/api/moat').then(r => r.json()).then(items => {
 });
 
 // ── PDF Demo ──────────────────────────────────────────────────────────────────
+const _PDF_DESCRIPTIONS = {
+  sample: '<strong>Standard LP quarterly report</strong> — vertical month/return table, beginning + ending NAV, fee disclosure. The baseline: if this doesn\'t parse perfectly, nothing else matters.',
+  format_a: '<strong>AQR-style single-page factsheet</strong> — summary performance (1M/3M/YTD/1Y) + calendar grid. Challenge: no standard table structure, pdfplumber can\'t extract the grid as a table → falls back to calendar text parser.',
+  format_b: '<strong>Ambiguous column header</strong> — says "Return (%)" instead of "Net Return (%)". Why it matters: LP committees need net-of-fee returns. If we silently report gross returns, allocation decisions are based on inflated numbers. Parser flags unknown return type and reduces confidence.',
+  format_c: '<strong>Gross + Net columns side by side</strong> — Gross Return first, Net Return second. A naive parser picks the first numeric column (gross) and silently over-reports performance. Our column-header-aware parser correctly selects "Net Return".',
+  format_d: '<strong>Multi-year calendar grid (Winton/CTA style)</strong> — 2024 full year + 2025 partial. Naive approach: return calendar 2024 (12 months, stale). Correct approach: trailing 12 months (May 2024–Apr 2025). LP committees evaluate rolling windows, not calendar years.',
+  format_e: '<strong>US GAAP parenthetical negatives</strong> — fund admins (Citco, SS&C) write losses as (0.91)% instead of -0.91%. A regex that only matches minus signs treats (0.91) as +0.91 → sign inversion on every losing month → completely wrong risk profile.',
+  format_f: '<strong>EUR-denominated European fund</strong> — € symbols in AUM/NAV, explicit "Fund Currency: EUR". Without multi-currency detection: AUM gets misread or skipped, NAV reconciliation breaks, and LP sees USD-denominated numbers for a EUR fund.',
+  format_g: '<strong>European comma decimal returns</strong> — continental GPs write 1,23% instead of 1.23%. float("1,23") throws ValueError → every month\'s return is silently dropped → 0 months extracted → total extraction failure. This is the most common "works in the US, breaks in Europe" bug.',
+};
+function updatePdfDescription() {
+  const key = document.getElementById('pdf-select').value;
+  document.getElementById('pdf-desc').innerHTML = _PDF_DESCRIPTIONS[key] || '';
+}
+updatePdfDescription();  // show description on page load
+
 function runPdfDemo() {
   const btn = document.getElementById('pdf-parse-btn');
+  const pdfKey = document.getElementById('pdf-select').value;
   btn.disabled = true;
-  btn.textContent = '⏳ Parsing PDF…';
+  btn.textContent = '⏳ Parsing…';
 
-  fetch('/api/pdf_demo').then(r => r.json()).then(d => {
+  fetch('/api/pdf_demo?pdf=' + pdfKey).then(r => r.json()).then(d => {
     if (d.status !== 'success') {
       btn.textContent = '✗ ' + d.message;
       btn.disabled = false;
       return;
     }
-    btn.textContent = '✓ Parsed';
+    btn.textContent = '▶ Parse';
+    btn.disabled = false;
 
     const recColor = { RECOMMEND: '#3fb950', WATCHLIST: '#d29922', PASS: '#f85149' };
     const m = d.metrics;

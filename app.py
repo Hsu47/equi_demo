@@ -301,13 +301,27 @@ def static_files(filename):
 def api_pdf_demo():
     """Live PDF extraction demo: parse sample LP report → transform → score."""
     import time as _time
+    from flask import request
     from pipeline.ingest_pdf import load_fund_from_pdf
     from pipeline.transform import transform_fund
     from pipeline.score import (composite_score, sharpe_ratio, max_drawdown,
                                  sortino_ratio, pearson_correlation)
     from pipeline.transform import get_spy_monthly
 
-    pdf_path = os.path.join(os.path.dirname(__file__), "static", "sample_lp_report.pdf")
+    # Allow selecting different sample PDFs via query parameter
+    pdf_key = request.args.get("pdf", "sample")
+    _PDF_OPTIONS = {
+        "sample":   "static/sample_lp_report.pdf",
+        "format_a": "static/test_pdfs/format_a_aqr_factsheet.pdf",
+        "format_b": "static/test_pdfs/format_b_ambiguous_headers.pdf",
+        "format_c": "static/test_pdfs/format_c_gross_and_net.pdf",
+        "format_d": "static/test_pdfs/format_d_calendar_grid.pdf",
+        "format_e": "static/test_pdfs/format_e_parenthetical_negatives.pdf",
+        "format_f": "static/test_pdfs/format_f_eur_denominated.pdf",
+        "format_g": "static/test_pdfs/format_g_european_comma_returns.pdf",
+    }
+    rel_path = _PDF_OPTIONS.get(pdf_key, _PDF_OPTIONS["sample"])
+    pdf_path = os.path.join(os.path.dirname(__file__), rel_path)
 
     t0 = _time.time()
     try:
