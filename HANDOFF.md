@@ -504,3 +504,81 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：如果一個歐洲基金（Brevan Howard、Man Group）的 LP 報告用 EUR 計價，我們的 parser 會怎樣？
+
+答案：**AUM 靜默返回 null**。`_find_aum()` 只認 `$` 和 `USD`，如果 PDF 寫 `€850M` 或 `£2,500,000`：
+- AUM = null（靜默失敗，不是 error）
+- NAV reconciliation 被跳過（因為缺少 NAV 值）
+- Confidence 不受影響 — 看起來 "正常"
+- LP 分析師以為「這份 PDF 沒有寫 AUM」，實際上是 parser 不認非 USD
+
+更危險的場景：output 完全沒有 `currency` 欄位。分析師看到 `aum_mm: 850.0`，不知道是 USD 還是 EUR。850M USD 和 850M EUR 的差距可能 10-15%（匯率），直接影響 portfolio allocation 的 sizing。
+
+對全球 LP（CalPERS 投資 47% 在非美國基金）來說，這不是 edge case，是核心需求。
+
+### DEV
+改了什麼：
+- **重寫 `_try_parse_amount()`**：從只支援 `$`/`USD` → 支援 `€`/`£`/`¥`/`CHF`/`A$`/`C$`/`HK$`/`S$` 符號 + 13 種 ISO 幣別代碼
+- **`_find_aum()` 和 `_find_beginning_nav()`** 改為回傳 `(value, currency)` tuple
+- **新增 output 欄位**：`currency`（ISO 4217）、`extraction.currency_source`（aum_line/nav_line/default）
+- **幣別 warning**：當 AUM 有值但幣別未明確偵測到時，警告「defaulting to USD」
+- **消除重複程式碼**：`_find_beginning_nav` 不再自帶 `_try_parse_amount` 副本，改用共用的 top-level 函數
+- **新增 Format E 測試 PDF**：模擬 EUR 計價的歐洲基金（Brevan Howard 風格）
+- **新增 10 個 test cases**：8 個 Format E 測試 + 2 個 edge case（currency 偵測、multi-currency parsing unit test）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**46/46 tests PASSED** (2.19 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Currency | Confidence | Method |
+|-----|---------|-----|----------|------------|--------|
+| sample_lp_report.pdf | 12/12 exact ✓ | 2.66 ✓ | USD (from $) | 1.0 | table |
+| format_a (AQR) | 12/12 exact ✓ | 850.0 ✓ | USD (from $) | 0.94 | calendar_text |
+| format_b (ambiguous) | 12/12 exact ✓ | 450.41 ✓ | USD (from $) | 1.0 | table |
+| format_c (gross+net) | 12/12 exact ✓ | 1200.0 ✓ | USD (from $) | 1.0 | table |
+| format_d (calendar) | 12/12 exact ✓ | 3200.0 ✓ | USD (from $) | 0.94 | calendar_text |
+| **format_e (EUR)** | **12/12 exact ✓** | **750.0 ✓** | **EUR (from €)** | **1.0** | **table** |
+
+Multi-currency parsing unit tests（15 cases）：
+
+| Format | Example | Value | Currency | Status |
+|--------|---------|-------|----------|--------|
+| $ + M | $2.66M | 2.66 | USD | ✓ |
+| € + M | €850M | 850.0 | EUR | ✓ |
+| £ + B | £1.2B | 1200.0 | GBP | ✓ |
+| ¥ + bare | ¥50,000,000,000 | 50000.0 | JPY | ✓ |
+| CHF + M | CHF 350M | 350.0 | CHF | ✓ |
+| bare + USD | 2,660,284 USD | 2.66 | USD | ✓ |
+| bare + EUR | 850,000,000 EUR | 850.0 | EUR | ✓ |
+| bare + GBP | 1,200,000 GBP | 1.2 | GBP | ✓ |
+| bare + JPY | 3,200,000,000 JPY | 3200.0 | JPY | ✓ |
+| bare + CHF | 420,000,000 CHF | 420.0 | CHF | ✓ |
+
+LP 視角評估：
+- **幣別可見性**：分析師直接看到 `currency: "EUR"`，不再猜測
+- **AUM 不再靜默失敗**：€850M 正確解析為 850.0 + EUR
+- **NAV reconciliation 不再被跳過**：因為 beginning/ending NAV 都能正確解析
+- **currency_source 可稽核**：知道幣別是從 AUM 行偵測（aum_line）還是 default
+- **13 種 ISO 幣別**：覆蓋全球主要基金計價幣別
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**LLM fallback（v2.6）**：
+- 我們現在有完整的 confidence 機制、6 種格式測試、多幣別支援、46 個自動化測試
+- 當 confidence < 0.6 或 ocr_needed=true，與其給出不可靠的數據，直接送 Claude API
+- Claude 可以「看」圖片，處理掃描件，理解非標準格式
+- 這是 demo 的殺手級功能
+
+或者：
+- **v2.5: Format Registry** — 記住已知 GP 格式指紋，production 穩定性
+- **benchmark 提取** — 抓 benchmark return，讓 LP 做相對績效比較
+- **AUM 幣別轉換** — 有了幣別偵測，可以加 FX rate 自動轉換為 USD
