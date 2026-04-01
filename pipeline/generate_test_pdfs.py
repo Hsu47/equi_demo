@@ -42,8 +42,8 @@ GROUND_TRUTH = {
     },
     "format_b_ambiguous_headers.pdf": {
         "monthly_returns": GT_MONTHLY,
-        "aum_mm": 420.0,
-        "return_type": "unknown",  # parser should flag this
+        "aum_mm": 450.41,  # ending NAV = beginning * compound(returns)
+        "return_type": "net",  # text says "stated after all applicable fees"
     },
     "format_c_gross_and_net.pdf": {
         "monthly_returns": GT_MONTHLY,  # must pick NET, not gross
@@ -183,7 +183,7 @@ def build_format_b():
     story.append(Paragraph("Capital Account Summary", st["section"]))
     cap = [
         ["Beginning NAV (Jan 1, 2025)", "$420,000,000"],
-        ["Ending NAV (Dec 31, 2025)", "$420,000,000"],
+        ["Ending NAV (Dec 31, 2025)", "$450,407,113"],
     ]
     t = Table(cap, colWidths=[4*inch, 2.5*inch])
     t.setStyle(TableStyle([
