@@ -19,16 +19,16 @@ import pdfplumber
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 _RETURN_PATTERN = re.compile(
-    r"\((\d{1,3}\.\d{1,4})\)\s*%?"     # e.g. (0.91)% — parenthetical negative
-    r"|([+-]?\d{1,3}\.\d{1,4})\s*%?"   # e.g. +1.82% or -0.91
+    r"\((\d{1,3}[.,]\d{1,4})\)\s*%?"     # e.g. (0.91)% or (0,91)% — parenthetical negative
+    r"|([+-]?\d{1,3}[.,]\d{1,4})\s*%?"   # e.g. +1.82% or -0,91% — standard or European
 )
 
 
 def _parse_return_match(m) -> float:
-    """Extract float from a _RETURN_PATTERN match, handling parenthetical negatives."""
-    if m.group(1):  # parenthetical negative: (0.91)
-        return -float(m.group(1))
-    return float(m.group(2))  # standard: +1.82 or -0.91
+    """Extract float from a _RETURN_PATTERN match, handling parenthetical negatives and European commas."""
+    if m.group(1):  # parenthetical negative: (0.91) or (0,91)
+        return -float(m.group(1).replace(",", "."))
+    return float(m.group(2).replace(",", "."))  # standard: +1.82 or European: +1,82
 
 _MONTH_KEYWORDS = {
     "january", "february", "march", "april", "may", "june",
@@ -576,6 +576,7 @@ def _is_month_cell(cell_text: str) -> bool:
 def _normalize_cell(cell) -> str:
     """Normalize a table cell value for return parsing.
     Handles parenthetical negatives: (0.91) → -0.91
+    Handles European comma decimals: 1,23 → 1.23
     """
     if cell is None:
         return ""
@@ -583,9 +584,15 @@ def _normalize_cell(cell) -> str:
     # Remove percentage signs, plus signs, whitespace variants
     s = s.replace("%", "").replace("+", "").replace("\u00a0", " ").strip()
     # Convert parenthetical negatives: (0.91) → -0.91
-    paren_m = re.match(r"^\((\d+(?:\.\d+)?)\)$", s)
+    # Also handle European comma in parentheticals: (0,91) → -0.91
+    paren_m = re.match(r"^\((\d+(?:[.,]\d+)?)\)$", s)
     if paren_m:
-        s = "-" + paren_m.group(1)
+        s = "-" + paren_m.group(1).replace(",", ".")
+    # European comma decimal: digits,digits (1-2 decimal places)
+    # e.g. "1,23" → "1.23", "-0,91" → "-0.91"
+    # NOT thousands separators (3+ digits after comma like 1,234)
+    elif re.match(r"^-?\d+,\d{1,2}$", s):
+        s = s.replace(",", ".")
     return s
 
 
