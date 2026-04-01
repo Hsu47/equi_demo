@@ -614,6 +614,7 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
     Returns (list[float], list[str]) — returns and any extraction warnings.
     """
     all_returns = []
+    all_month_labels = []
     warnings = []
     diagnostics["tables_inspected"] = len(tables)
     diagnostics["rows_scanned"] = 0
@@ -628,7 +629,13 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
         # Check for horizontal/calendar format first
         year_col = _detect_horizontal_table(table)
         if year_col is not None:
+            # Extract the year from header for labeling
+            header = [str(c or "").strip() for c in table[0]]
+            year_m = re.match(r'^(20\d{2})', header[year_col])
+            horiz_year = int(year_m.group(1)) if year_m else None
+
             table_returns = []
+            table_labels = []
             for row in table[1:]:  # skip header
                 cells = [str(c or "").strip() for c in row]
                 diagnostics["rows_scanned"] += 1
@@ -639,16 +646,23 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
                     val, err = _parse_return_from_row(["_placeholder_", cells[year_col]])
                     if val is not None:
                         table_returns.append(val)
+                        # Build month label from row's month cell + header year
+                        label = _parse_month_label(cells[0])
+                        if label and horiz_year and not re.search(r'\d{4}', label):
+                            label = f"{label} {horiz_year}"
+                        table_labels.append(label)
                         diagnostics["rows_matched"] += 1
                     elif err:
                         diagnostics["rows_skipped"] += 1
                         warnings.append(f"table[{table_idx}] horizontal row skip: {err}")
             if len(table_returns) >= 6:
                 all_returns = table_returns
+                all_month_labels = table_labels
                 continue
 
         # Standard vertical format
         table_returns = []
+        table_labels = []
         has_month_col = False
         table_return_col = None
 
@@ -680,6 +694,7 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
                 )
                 if val is not None:
                     table_returns.append(val)
+                    table_labels.append(_parse_month_label(first_cell))
                     diagnostics["rows_matched"] += 1
                 elif err and is_month_row:
                     diagnostics["rows_skipped"] += 1
@@ -690,12 +705,15 @@ def _extract_monthly_returns_from_tables(tables: list, diagnostics: dict):
         # Accept this table if it has 6+ months AND more matches than current best
         if len(table_returns) >= 6 and len(table_returns) > len(all_returns):
             all_returns = table_returns   # main performance table found
+            all_month_labels = table_labels
             return_col_idx = table_return_col
         elif 1 <= len(table_returns) <= 5 and all_returns:
             all_returns.extend(table_returns)  # continuation rows (split across pages)
+            all_month_labels.extend(table_labels)
 
     diagnostics["return_column"] = return_col_label or "auto (first numeric)"
     diagnostics["col_return_type"] = col_return_type
+    diagnostics["month_labels"] = all_month_labels
     return all_returns, warnings
 
 
@@ -705,6 +723,7 @@ def _extract_monthly_returns_from_text(text: str, diagnostics: dict):
     Returns (list[float], list[str]) — returns and warnings.
     """
     returns = []
+    month_labels = []
     warnings = []
     lines = text.splitlines()
     lines_scanned = 0
@@ -722,15 +741,69 @@ def _extract_monthly_returns_from_text(text: str, diagnostics: dict):
                     val = float(m.group(1))
                     if -20 <= val <= 20:
                         returns.append(val / 100.0)
+                        month_labels.append(_parse_month_label(line))
                 except ValueError:
                     warnings.append(f"text parse fail: {line.strip()[:60]}")
 
     diagnostics["text_lines_scanned"] = lines_scanned
+    diagnostics["month_labels"] = month_labels
     return returns, warnings
 
 
 _MONTH_ABBREVS = ["jan", "feb", "mar", "apr", "may", "jun",
                   "jul", "aug", "sep", "oct", "nov", "dec"]
+
+_MONTH_ABBREVS_TITLE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+_MONTH_FULL_TO_IDX = {
+    "january": 0, "february": 1, "march": 2, "april": 3, "may": 4, "june": 5,
+    "july": 6, "august": 7, "september": 8, "october": 9, "november": 10, "december": 11,
+    "jan": 0, "feb": 1, "mar": 2, "apr": 3, "jun": 5,
+    "jul": 6, "aug": 7, "sep": 8, "oct": 9, "nov": 10, "dec": 11,
+}
+
+
+def _parse_month_label(cell_text: str) -> str:
+    """
+    Extract a normalized month label from a cell.
+
+    Handles:
+      - "January 2025" → "Jan 2025"
+      - "Jan 2025"     → "Jan 2025"
+      - "2025-01"      → "Jan 2025"
+      - "01/2025"      → "Jan 2025"
+      - "January"      → "Jan" (no year)
+      - "Q1 2025"      → None (not a month)
+
+    Returns normalized label like "Jan 2025" or None if not parseable.
+    """
+    text = cell_text.strip()
+    text_l = text.lower()
+
+    # Try ISO date: 2025-01 or 01/2025
+    m = re.match(r'(\d{4})[-/](\d{1,2})', text)
+    if m:
+        year, month_num = int(m.group(1)), int(m.group(2))
+        if 1 <= month_num <= 12 and 2000 <= year <= 2100:
+            return f"{_MONTH_ABBREVS_TITLE[month_num - 1]} {year}"
+    m = re.match(r'(\d{1,2})/(\d{4})', text)
+    if m:
+        month_num, year = int(m.group(1)), int(m.group(2))
+        if 1 <= month_num <= 12 and 2000 <= year <= 2100:
+            return f"{_MONTH_ABBREVS_TITLE[month_num - 1]} {year}"
+
+    # Try "January 2025" or "Jan 2025" (with optional day)
+    for month_name, month_idx in _MONTH_FULL_TO_IDX.items():
+        if month_name in text_l:
+            # Look for a year
+            year_m = re.search(r'(20\d{2})', text)
+            if year_m:
+                return f"{_MONTH_ABBREVS_TITLE[month_idx]} {year_m.group(1)}"
+            # No year found — just return month abbreviation
+            return _MONTH_ABBREVS_TITLE[month_idx]
+
+    return None
 
 
 def _extract_calendar_text_format(text: str, diagnostics: dict):
@@ -833,7 +906,8 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
     trailing = all_monthly[-12:]
     returns = [v / 100.0 for (_, _, v) in trailing]
 
-    # Build a human-readable period label
+    # Build month labels and human-readable period label
+    month_labels = [f"{_month_names[mi]} {y}" for (y, mi, _) in trailing]
     sy, sm, _ = trailing[0]
     ey, em, _ = trailing[-1]
     period_label = f"{_month_names[sm]} {sy} – {_month_names[em]} {ey}"
@@ -842,6 +916,7 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
     diagnostics["calendar_text_trailing_12_period"] = period_label
     diagnostics["calendar_text_months_extracted"] = len(returns)
     diagnostics["calendar_text_total_months_available"] = len(all_monthly)
+    diagnostics["month_labels"] = month_labels
 
     if len(returns) < 12:
         warnings.append(
@@ -943,6 +1018,8 @@ def load_fund_from_pdf(path: str) -> dict:
             "aum_mm":           float | None,   # ending NAV in millions
             "beginning_nav_mm": float | None,   # beginning NAV in millions
             "raw_returns":      list[float],    # monthly returns as decimals
+            "labeled_returns":  list[dict],    # [{"month": "Jan 2025", "return": 0.0182}, ...]
+            "reporting_period": str | None,    # e.g. "Jan 2025 – Dec 2025"
             "source_format":    "pdf",
             "source_path":      str,
             "extraction": {
@@ -1013,7 +1090,33 @@ def load_fund_from_pdf(path: str) -> dict:
             method = "failed"
 
     # Take last 12 months if more than 12 found
+    month_labels = diagnostics.get("month_labels", [])
+    if len(month_labels) > len(returns):
+        month_labels = month_labels[:len(returns)]
+    elif len(month_labels) < len(returns):
+        # Pad with None if labels are incomplete
+        month_labels = month_labels + [None] * (len(returns) - len(month_labels))
+    # Slice both returns and labels together
+    if len(returns) > 12:
+        month_labels = month_labels[-12:]
     returns = returns[-12:]
+    month_labels = month_labels[-12:]
+
+    # Build labeled returns and reporting period
+    labeled_returns = [
+        {"month": lbl, "return": ret}
+        for lbl, ret in zip(month_labels, returns)
+    ]
+    # Derive reporting_period from first and last non-None labels
+    first_label = next((lr["month"] for lr in labeled_returns if lr["month"]), None)
+    last_label = next((lr["month"] for lr in reversed(labeled_returns) if lr["month"]), None)
+    if first_label and last_label and first_label != last_label:
+        reporting_period = f"{first_label} – {last_label}"
+    elif first_label:
+        reporting_period = first_label
+    else:
+        # Fall back to calendar_text trailing period if available
+        reporting_period = diagnostics.get("calendar_text_trailing_12_period")
 
     if len(returns) < 3 and not summary_perf:
         raise ValueError(
@@ -1101,6 +1204,8 @@ def load_fund_from_pdf(path: str) -> dict:
         "mgmt_fee_pct":      fees["mgmt_fee_pct"],
         "incentive_fee_pct": fees["incentive_fee_pct"],
         "raw_returns":       returns,
+        "labeled_returns":   labeled_returns,
+        "reporting_period":  reporting_period,
         "source_format":     "pdf",
         "source_path":       path,
         "extraction": {

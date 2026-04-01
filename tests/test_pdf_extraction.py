@@ -88,6 +88,21 @@ class TestSamplePdf:
     def test_fund_name(self):
         assert "Meridian" in self.result["name"]
 
+    def test_labeled_returns_present(self):
+        lr = self.result["labeled_returns"]
+        assert len(lr) == 12
+        for entry in lr:
+            assert "month" in entry and "return" in entry
+            assert entry["month"] is not None
+
+    def test_labeled_returns_months_correct(self):
+        months = [lr["month"] for lr in self.result["labeled_returns"]]
+        assert months[0] == "Jan 2025"
+        assert months[11] == "Dec 2025"
+
+    def test_reporting_period(self):
+        assert self.result["reporting_period"] == "Jan 2025 – Dec 2025"
+
 
 # ── Multi-format tests ───────────────────────────────────────────────────────
 
@@ -213,6 +228,17 @@ class TestFormatD:
     def test_confidence(self):
         assert self.ext["confidence"] >= 0.85
 
+    def test_labeled_returns_trailing_12_labels(self):
+        """Trailing-12 labels should span May 2024 – Apr 2025."""
+        months = [lr["month"] for lr in self.result["labeled_returns"]]
+        assert months[0] == "May 2024"
+        assert months[-1] == "Apr 2025"
+        assert len(months) == 12
+        assert all(m is not None for m in months)
+
+    def test_reporting_period_cross_year(self):
+        assert self.result["reporting_period"] == "May 2024 – Apr 2025"
+
 
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
@@ -234,6 +260,7 @@ class TestEdgeCases:
     def test_required_fields_present(self):
         result = load_fund_from_pdf(SAMPLE_PDF)
         required = ["fund_id", "ticker", "name", "aum_mm", "raw_returns",
+                     "labeled_returns", "reporting_period",
                      "source_format", "source_path", "extraction"]
         for field in required:
             assert field in result, f"Missing required field: {field}"
