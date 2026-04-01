@@ -584,3 +584,90 @@ LP 視角評估：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API
 - **v2.5: Format Registry** — 記住 GP 格式指紋
 - **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較
+
+---
+
+## Iteration 9 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：LP 做 portfolio-level AUM aggregation 時，什麼會讓他們靜默地算錯總 AUM？
+
+答案：**幣別假設**。目前所有 AUM 解析 hardcode 假設 USD：
+1. `_find_aum()` 只匹配 `$` 和 `USD` — 如果 PDF 寫 `€680,000,000`，要嘛抓不到（Format 5 的 bare number 碰巧能抓到）、要嘛抓到但標記為 USD
+2. LP 做 portfolio aggregation 時，EUR 680M 被當 USD 680M → 匯率差異 ~8-10% 被靜默吃掉
+3. 歐洲小數點格式（`1.234.567,89`）會導致 AUM 被截斷三個數量級
+4. 沒有幣別標記的 AUM 就像沒有單位的物理量測 — 看起來完整但不可靠
+
+這是 toy demo 和 production-grade 系統的分水嶺。
+
+**決策：新增 `_detect_currency()` + 擴展 AUM 解析支援多幣別符號**
+
+### DEV
+1. **新增 `_detect_currency(text)`**：
+   - 掃描 ISO 4217 貨幣代碼（USD, EUR, GBP, JPY, CHF 等 18 種）
+   - 掃描貨幣符號（$, €, £, ¥）
+   - `$` 符號歧義消解：檢查上下文線索（"canadian", "australia" 等）區分 USD/CAD/AUD/SGD
+   - 修復 false positive：`"unaudited"` 不再觸發 AUD 偵測（改用空格分隔的 ` aud `）
+   - 回傳 `{currency, confidence, evidence}`
+
+2. **擴展 `_find_aum()` 的金額解析**：
+   - Format 1-3：`$` → 通用 `[$€£¥]`，支援所有主要貨幣符號
+   - Format 4：`USD` → `USD|EUR|GBP|JPY|CHF|CAD|AUD|SGD|HKD`
+   - 新 Format 5：歐洲小數點格式（`1.234.567,89 EUR`）→ 正確轉換為 1234567.89
+
+3. **整合到 `load_fund_from_pdf()`**：
+   - 新頂層欄位：`currency`（ISO 4217 code）
+   - 新 extraction 欄位：`currency`, `currency_confidence`
+   - Non-USD 產生 warning：「Convert to USD before portfolio-level aggregation」
+   - Currency unknown 產生 warning：「Verify reporting currency with GP」
+   - Confidence 調整：non-USD -0.05（數據有效但需轉換）、unknown -0.10（風險更高）
+
+4. **新 Format F 測試 PDF**（Nordica European Credit Fund SICAV）：
+   - EUR 計價，€680M AUM，Luxembourg SICAV
+   - 8 個新測試案例 + 3 個 sample PDF 幣別回歸測試
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**54/54 tests PASSED** (2.86 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Currency | Confidence | Notes |
+|-----|---------|-----|----------|------------|-------|
+| sample_lp_report.pdf | 12/12 ✓ | 2.66 ✓ | USD (high) | 1.0 | No regression |
+| format_a (AQR factsheet) | 12/12 ✓ | 850.0 ✓ | USD (high) | 0.94 | No regression |
+| format_b (ambiguous headers) | 12/12 ✓ | 450.41 ✓ | USD (high) | 1.0 | No regression |
+| format_c (gross + net cols) | 12/12 ✓ | 1200.0 ✓ | USD (high) | 1.0 | No regression |
+| format_d (calendar grid) | 12/12 ✓ | 3200.0 ✓ | USD (high) | 0.94 | No regression |
+| format_e (parenthetical neg) | 12/12 ✓ | 579.09 ✓ | USD (high) | 1.0 | No regression |
+| **format_f (EUR fund)** | **12/12 ✓** | **680.0 ✓** | **EUR (high)** | **0.94** | **NEW** |
+
+前後比較（多幣別場景）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| `€680,000,000` | 抓不到或 bare number 抓到但標為 USD | 正確解析為 680.0M EUR |
+| 幣別標記 | 無（全部假設 USD） | `currency: "EUR"` + `currency_confidence: "high"` |
+| LP aggregation | EUR 680M 被當 USD 680M（~8% 誤差） | Warning: "Convert to USD before aggregation" |
+| `"unaudited"` 文字 | false positive → AUD | 正確忽略（改用 word boundary 匹配） |
+| confidence | 1.0（虛高，忽略幣別風險） | EUR: 0.94（-0.05 非 USD penalty） |
+
+LP 視角評估：
+- 幣別標記是 AUM aggregation 的**基本衛生需求** — 沒有它，10 億 USD portfolio 可能有 5-10% 的靜默匯率誤差
+- EUR fund 的 warning 讓分析師在匯總前知道要做幣別轉換
+- `currency_confidence` 讓分析師知道偵測的可靠度
+- `"unaudited"` → AUD 的 false positive 被修復，避免 USD fund 被誤標
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**Benchmark 提取缺失**：
+- 每份 LP 報告都有 benchmark（S&P 500, HFRI, Euro Stoxx 50）
+- 但我們完全忽略它 — LP 無法做相對績效分析
+- 沒有 benchmark 的回報數字就像沒有參照系的速度 — 「年化 12%」是好是壞？
+- 如果 benchmark 是 15%，基金實際上 underperform 3%
+
+或者更 demo 導向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **v2.5: Format Registry** — 記住 GP 格式指紋（production 價值高）
+- **歐洲小數點格式實測** — 用真實的德語/法語 PDF 驗證 `1.234,56` 解析
