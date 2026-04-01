@@ -242,6 +242,115 @@ class TestEdgeCases:
         result = load_fund_from_pdf(SAMPLE_PDF)
         ext = result["extraction"]
         required = ["method", "confidence", "returns_count", "return_type",
-                     "warnings", "ocr_needed"]
+                     "warnings", "ocr_needed", "sanity_checks"]
         for field in required:
             assert field in ext, f"Missing extraction field: {field}"
+
+
+# ── Analytics Tests ──────────────────────────────────────────────────────────
+
+class TestAnalytics:
+    """Test computed analytics on sample PDF."""
+
+    def test_analytics_present(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        assert "analytics" in result
+        a = result["analytics"]
+        required = ["cumulative_return", "annualized_return", "annualized_volatility",
+                     "sharpe_ratio", "max_drawdown", "best_month", "worst_month",
+                     "months_analyzed"]
+        for field in required:
+            assert field in a, f"Missing analytics field: {field}"
+
+    def test_cumulative_return(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        a = result["analytics"]
+        # Compound 12 monthly returns: product of (1+r) - 1
+        expected = 1.0
+        for r in SAMPLE_GROUND_TRUTH["monthly_returns"]:
+            expected *= (1.0 + r / 100.0)
+        expected -= 1.0
+        assert abs(a["cumulative_return"] - expected) < 1e-4
+
+    def test_annualized_return_positive(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        a = result["analytics"]
+        # Fund has positive cumulative return → annualized should be positive
+        assert a["annualized_return"] > 0
+
+    def test_volatility_reasonable(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        a = result["analytics"]
+        # Macro fund: vol should be in 2-20% range
+        assert 0.02 < a["annualized_volatility"] < 0.20
+
+    def test_sharpe_positive(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        a = result["analytics"]
+        assert a["sharpe_ratio"] > 0
+
+    def test_max_drawdown_bounded(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        a = result["analytics"]
+        assert 0 <= a["max_drawdown"] <= 1.0
+
+    def test_best_worst_month(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        a = result["analytics"]
+        assert a["best_month"] > 0   # fund has positive months
+        assert a["worst_month"] < 0  # fund has negative months
+        assert a["best_month"] >= a["worst_month"]
+
+    def test_months_analyzed(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        assert result["analytics"]["months_analyzed"] == 12
+
+
+# ── Sanity Checks Tests ─────────────────────────────────────────────────────
+
+class TestSanityChecks:
+    """Test content-level sanity validation."""
+
+    def test_all_checks_pass_sample(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        checks = result["extraction"]["sanity_checks"]
+        assert len(checks) >= 3
+        for c in checks:
+            assert c["passed"], f"Sanity check '{c['check']}' failed: {c['detail']}"
+
+    def test_sanity_check_structure(self):
+        result = load_fund_from_pdf(SAMPLE_PDF)
+        for c in result["extraction"]["sanity_checks"]:
+            assert "check" in c
+            assert "passed" in c
+            assert "detail" in c
+
+    def test_unit_function_magnitude(self):
+        """Test _sanity_check_returns catches extreme magnitude."""
+        from pipeline.ingest_pdf import _sanity_check_returns, _compute_analytics
+        # Returns in percentage form (not divided by 100) — parser bug simulation
+        bad_returns = [1.82, 0.54, -0.91, 2.13, 0.38, -1.44, 3.07, 1.21, -0.67, 1.95, 0.83, 1.42]
+        analytics = _compute_analytics(bad_returns)
+        checks = _sanity_check_returns(bad_returns, analytics)
+        magnitude_check = [c for c in checks if c["check"] == "magnitude"][0]
+        assert not magnitude_check["passed"], "Should flag returns > 30%"
+
+    def test_unit_function_all_zeros(self):
+        """Test _sanity_check_returns catches all-zero returns."""
+        from pipeline.ingest_pdf import _sanity_check_returns, _compute_analytics
+        zeros = [0.0] * 12
+        analytics = _compute_analytics(zeros)
+        checks = _sanity_check_returns(zeros, analytics)
+        zero_check = [c for c in checks if c["check"] == "non_zero"][0]
+        assert not zero_check["passed"]
+
+    def test_all_formats_pass_sanity(self):
+        """All test PDFs should pass all sanity checks."""
+        pdfs = [SAMPLE_PDF] + [
+            os.path.join(TEST_PDF_DIR, f)
+            for f in os.listdir(TEST_PDF_DIR) if f.endswith(".pdf")
+        ]
+        for pdf in pdfs:
+            result = load_fund_from_pdf(pdf)
+            for c in result["extraction"]["sanity_checks"]:
+                assert c["passed"], f"{pdf}: sanity '{c['check']}' failed: {c['detail']}"

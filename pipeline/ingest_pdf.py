@@ -15,6 +15,7 @@ Usage:
 
 import re
 import os
+import math
 import pdfplumber
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
@@ -406,6 +407,145 @@ def _classify_return_type(text: str, col_return_type: str = None) -> str:
     if gross_score > 0 and gross_score > net_score:
         return "gross"
     return "unknown"
+
+
+def _compute_analytics(returns: list) -> dict:
+    """
+    Compute summary risk/return analytics from monthly returns.
+
+    These serve two purposes:
+      1. Instant LP-readable performance summary (no scoring pipeline needed)
+      2. Input for content-level sanity checks (catches silent parsing errors)
+
+    Returns:
+        {
+            "cumulative_return":      float,  # total compound return
+            "annualized_return":      float,  # geometric annualized
+            "annualized_volatility":  float,  # sqrt(12) * monthly stdev
+            "sharpe_ratio":           float,  # ann_return / ann_vol (rf=0)
+            "max_drawdown":           float,  # worst peak-to-trough
+            "best_month":             float,  # highest single month
+            "worst_month":            float,  # lowest single month
+            "months_analyzed":        int,
+        }
+    """
+    if not returns:
+        return {}
+
+    n = len(returns)
+
+    # Cumulative return (compound)
+    compound = 1.0
+    nav_curve = [1.0]
+    for r in returns:
+        compound *= (1.0 + r)
+        nav_curve.append(compound)
+    cumulative_return = compound - 1.0
+
+    # Annualized return (geometric)
+    if n >= 2:
+        annualized_return = compound ** (12.0 / n) - 1.0
+    else:
+        annualized_return = cumulative_return
+
+    # Annualized volatility
+    if n >= 2:
+        mean_r = sum(returns) / n
+        variance = sum((r - mean_r) ** 2 for r in returns) / (n - 1)
+        monthly_vol = math.sqrt(variance)
+        annualized_vol = monthly_vol * math.sqrt(12)
+    else:
+        annualized_vol = 0.0
+
+    # Sharpe ratio (0% risk-free assumption — standard for alt funds screening)
+    sharpe = annualized_return / annualized_vol if annualized_vol > 0 else 0.0
+
+    # Max drawdown
+    peak = nav_curve[0]
+    max_dd = 0.0
+    for nav in nav_curve[1:]:
+        if nav > peak:
+            peak = nav
+        dd = (peak - nav) / peak
+        if dd > max_dd:
+            max_dd = dd
+
+    return {
+        "cumulative_return":     round(cumulative_return, 6),
+        "annualized_return":     round(annualized_return, 6),
+        "annualized_volatility": round(annualized_vol, 6),
+        "sharpe_ratio":          round(sharpe, 3),
+        "max_drawdown":          round(max_dd, 6),
+        "best_month":            round(max(returns), 6),
+        "worst_month":           round(min(returns), 6),
+        "months_analyzed":       n,
+    }
+
+
+def _sanity_check_returns(returns: list, analytics: dict) -> list:
+    """
+    Content-level sanity checks on extracted return data.
+
+    Process-level confidence (method, completeness, OCR) can't catch cases where
+    the parser successfully extracts numbers that are financially nonsensical.
+
+    Example silent errors these catch:
+      - Cumulative NAV changes mistaken for monthly returns (monotonically increasing)
+      - Returns in wrong units (basis points or already-decimal)
+      - Parsing noise from non-return tables (all zeros, extreme magnitudes)
+
+    Returns list of check dicts: [{"check": str, "passed": bool, "detail": str}]
+    """
+    checks = []
+    if not returns or not analytics:
+        return [{"check": "has_data", "passed": False,
+                 "detail": "No returns data to validate"}]
+
+    # Check 1: Magnitude — no single month should exceed 30% for non-crypto funds
+    # (CTA/macro extremes: ~15%, equity L/S blow-up: ~20%)
+    max_abs = max(abs(r) for r in returns)
+    magnitude_ok = max_abs < 0.30
+    checks.append({
+        "check": "magnitude",
+        "passed": magnitude_ok,
+        "detail": (f"Max |monthly return| = {max_abs:.4f}"
+                   + ("" if magnitude_ok else " — exceeds 30%, verify data source"))
+    })
+
+    # Check 2: Volatility range — annualized vol between 0.5% and 80%
+    # Below 0.5%: returns might be in wrong units (already decimals, not %)
+    # Above 80%: returns might be in basis points or contaminated with non-return data
+    ann_vol = analytics.get("annualized_volatility", 0)
+    if len(returns) >= 3:
+        vol_ok = 0.005 <= ann_vol <= 0.80
+        checks.append({
+            "check": "volatility_range",
+            "passed": vol_ok,
+            "detail": (f"Annualized vol = {ann_vol:.4f} ({ann_vol*100:.2f}%)"
+                       + ("" if vol_ok else " — outside 0.5%-80% range, verify units"))
+        })
+
+    # Check 3: Non-zero — all zeros means parser grabbed empty/placeholder cells
+    all_zero = all(r == 0.0 for r in returns)
+    checks.append({
+        "check": "non_zero",
+        "passed": not all_zero,
+        "detail": ("Returns contain non-zero values" if not all_zero
+                   else "All returns are zero — likely parsing error")
+    })
+
+    # Check 4: Not monotonically increasing — would suggest cumulative NAV, not monthly
+    if len(returns) >= 6:
+        strictly_increasing = all(returns[i] < returns[i + 1]
+                                  for i in range(len(returns) - 1))
+        checks.append({
+            "check": "not_cumulative",
+            "passed": not strictly_increasing,
+            "detail": ("Returns are not monotonically increasing" if not strictly_increasing
+                       else "Returns are strictly increasing — might be cumulative, not monthly")
+        })
+
+    return checks
 
 
 def _reconcile_nav(beginning_nav_mm: float, ending_nav_mm: float,
@@ -1064,6 +1204,15 @@ def load_fund_from_pdf(path: str) -> dict:
             f"Some content may be image-based. Verify extracted returns against source."
         )
 
+    # ── Analytics + sanity checks ──────────────────────────────────────────
+    analytics = _compute_analytics(returns)
+    sanity_checks = _sanity_check_returns(returns, analytics)
+    sanity_failed = [c for c in sanity_checks if not c["passed"]]
+
+    # Add sanity warnings to the warnings list
+    for check in sanity_failed:
+        warnings.append(f"Sanity check '{check['check']}' failed: {check['detail']}")
+
     # ── Confidence score ─────────────────────────────────────────────────────
     method_scores = {"table": 1.0, "calendar_text": 0.85, "text": 0.5, "summary": 0.3, "failed": 0.0}
     method_score = method_scores.get(method, 0.0)
@@ -1085,10 +1234,12 @@ def load_fund_from_pdf(path: str) -> dict:
         ocr_adj = -0.30  # severe: most pages are images
     elif ocr_info["low_text_pages"] > 0 and method != "table":
         ocr_adj = -0.10  # partial: some pages are images + non-table method
+    # Sanity check penalty: each failed content-level check reduces trust
+    sanity_adj = -0.10 * len(sanity_failed)
     confidence = round(
         min(1.0, max(0.0, method_score * 0.4 + completeness_score * 0.5
             + (1.0 - warning_penalty) * 0.1 + reconciliation_adj
-            + return_type_adj + ocr_adj)),
+            + return_type_adj + ocr_adj + sanity_adj)),
         3
     )
 
@@ -1103,6 +1254,7 @@ def load_fund_from_pdf(path: str) -> dict:
         "raw_returns":       returns,
         "source_format":     "pdf",
         "source_path":       path,
+        "analytics":         analytics,
         "extraction": {
             "pages_scanned":    pages_scanned,
             "tables_found":     len(tables),
@@ -1121,6 +1273,7 @@ def load_fund_from_pdf(path: str) -> dict:
             "ocr_needed":       ocr_info["ocr_needed"],
             "low_text_pages":   ocr_info["low_text_pages"],
             "avg_chars_per_page": ocr_info["avg_chars_per_page"],
+            "sanity_checks":    sanity_checks,
             "warnings":              warnings,
             "summary_perf":     summary_perf,
             "reconciliation":   reconciliation,
