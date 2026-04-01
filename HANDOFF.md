@@ -504,3 +504,96 @@ LP 視角評估：
 - **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
 - **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
 - **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
+
+---
+
+## Iteration 8 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：confidence=1.0 真的代表「數據正確」嗎？
+
+目前的 confidence 是**純過程指標**：方法好不好（table=1.0）、抓了幾個月（12/12=1.0）、
+有沒有 OCR 問題、return type 有沒有標記。但完全沒有**內容驗證**。
+
+最危險的靜默錯誤場景：
+- Parser 把累計 NAV 變化當月報酬抓進來 → 值域合理（-20~20），confidence=1.0
+- Parser 抓到費用表的數字當報酬 → 數字長得很像月報酬
+- 某個格式的 % 已經是小數形式（0.0182 而非 1.82）→ 除以 100 後變 0.000182
+
+這些情境下，12 months, no warnings, confidence=1.0，但數字完全錯誤。
+NAV reconciliation 是唯一的內容驗證，但只有在同時有 beginning/ending NAV 時才能用。
+
+**解法：計算 analytics（cumulative, annualized return/vol, Sharpe, max DD），
+用 analytics 的金融合理性作為 content-level sanity check。**
+
+- Annualized vol < 0.5% → 數字可能是錯誤單位
+- 單月報酬 > 30% → 可能不是月度數據
+- 全部為零 → parser 抓到空白欄
+- 嚴格遞增 → 可能是累計值而非月度值
+
+### DEV
+新增兩個函數 + 整合到主流程：
+
+1. `_compute_analytics(returns)` — 從月報酬計算：
+   - cumulative_return, annualized_return, annualized_volatility
+   - sharpe_ratio (rf=0), max_drawdown, best/worst_month
+   - 用標準金融公式（geometric compound, sample stdev * sqrt(12)）
+
+2. `_sanity_check_returns(returns, analytics)` — 4 項 content-level 檢查：
+   - `magnitude`: 單月 |return| < 30%
+   - `volatility_range`: 年化 vol 在 0.5%-80% 之間
+   - `non_zero`: 不是全部為零
+   - `not_cumulative`: 不是嚴格遞增（>=6 個月時檢查）
+
+3. 整合：
+   - `analytics` dict 加入主回傳值（與 extraction 同層級）
+   - `sanity_checks` 加入 extraction metadata
+   - 每個失敗的 sanity check → confidence -0.10 + warning
+
+4. 測試：新增 13 個 test cases（TestAnalytics 8 個 + TestSanityChecks 5 個）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**49/49 tests PASSED** (2.59 seconds)
+
+sample_lp_report.pdf 回歸測試：
+
+| Check | Result |
+|-------|--------|
+| 12 monthly returns match ground truth | 12/12 exact match |
+| AUM = 2.66 | Correct |
+| Confidence = 1.0 | Correct |
+| All 4 sanity checks pass | ✓ |
+| Cumulative return = 10.72% | Correct (manual verified) |
+| Annualized vol = 4.69% | Correct (manual verified) |
+| Sharpe ratio = 2.288 | Correct (manual verified) |
+| Max drawdown = 1.44% | Correct (manual verified) |
+| All 5 PDF formats pass all sanity checks | ✓ |
+| No regressions (36 original tests) | ✓ |
+
+Analytics 手動驗算：
+- Cumulative: Π(1+r_i) - 1 = 10.7235% ✓
+- Annualized: (1+cum)^(12/12) - 1 = 10.7235% ✓（12個月恰好=1年）
+- Vol: sample_stdev(r) * √12 = 4.6873% ✓
+- Sharpe: 10.72/4.69 = 2.288 ✓
+
+LP 視角評估：
+- **即時風險回報摘要**：上傳 PDF 立即看到「年化報酬 10.7%, 波動率 4.7%, Sharpe 2.3」
+  — 這是 IC memo 的第一段話，不需要等 scoring pipeline
+- **Sanity check 防護網**：如果 parser 抓錯數據，vol < 0.5% 或 magnitude > 30% 會觸發 warning
+  — 這是 NAV reconciliation 之外的第二層 content validation
+- **Demo 說服力大幅提升**：「不只抓數字，還即時算出風險指標」
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**LLM fallback（v2.6）**：
+- 現在有三層 validation：(1) process-level confidence, (2) NAV reconciliation, (3) content sanity checks
+- 但對於「完全無法 rule-based 解析」的 PDF，這三層都無用——parser 直接失敗
+- LLM fallback 是最後的安全網：low confidence 時送 Claude API，讓 AI 理解非標準格式
+- 需要 anthropic SDK（已安裝）+ API key
+
+其他方向：
+- **多幣別支援** — EUR/GBP/JPY 基金的 AUM 會被靜默跳過（None）
+- **Benchmark 提取** — 抓 benchmark return 做相對績效比較
+- **Format Registry** — 記住 GP 格式指紋，提升解析穩定性
