@@ -19,16 +19,21 @@ import pdfplumber
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 _RETURN_PATTERN = re.compile(
-    r"\((\d{1,3}\.\d{1,4})\)\s*%?"     # e.g. (0.91)% — parenthetical negative
-    r"|([+-]?\d{1,3}\.\d{1,4})\s*%?"   # e.g. +1.82% or -0.91
+    r"\((\d{1,3}[.,]\d{1,4})\)\s*%?"     # e.g. (0.91)% or (0,91)% — parenthetical negative
+    r"|([+-]?\d{1,3}[.,]\d{1,4})\s*%?"   # e.g. +1.82% or -0.91 or 1,82%
 )
 
 
+def _comma_to_dot(s: str) -> str:
+    """Convert European decimal comma to dot: '1,23' → '1.23'"""
+    return s.replace(",", ".")
+
+
 def _parse_return_match(m) -> float:
-    """Extract float from a _RETURN_PATTERN match, handling parenthetical negatives."""
-    if m.group(1):  # parenthetical negative: (0.91)
-        return -float(m.group(1))
-    return float(m.group(2))  # standard: +1.82 or -0.91
+    """Extract float from a _RETURN_PATTERN match, handling parenthetical negatives and European commas."""
+    if m.group(1):  # parenthetical negative: (0.91) or (0,91)
+        return -float(_comma_to_dot(m.group(1)))
+    return float(_comma_to_dot(m.group(2)))  # standard: +1.82 or -0.91 or 1,82
 
 _MONTH_KEYWORDS = {
     "january", "february", "march", "april", "may", "june",
@@ -545,17 +550,26 @@ def _is_month_cell(cell_text: str) -> bool:
 
 def _normalize_cell(cell) -> str:
     """Normalize a table cell value for return parsing.
-    Handles parenthetical negatives: (0.91) → -0.91
+    Handles:
+      - Parenthetical negatives: (0.91) → -0.91
+      - European decimal comma: 1,23 → 1.23 (when not a thousands separator)
     """
     if cell is None:
         return ""
     s = str(cell).strip()
     # Remove percentage signs, plus signs, whitespace variants
     s = s.replace("%", "").replace("+", "").replace("\u00a0", " ").strip()
-    # Convert parenthetical negatives: (0.91) → -0.91
-    paren_m = re.match(r"^\((\d+(?:\.\d+)?)\)$", s)
+    # Convert parenthetical negatives: (0.91) or (0,91) → -0.91
+    paren_m = re.match(r"^\((\d+(?:[.,]\d+)?)\)$", s)
     if paren_m:
-        s = "-" + paren_m.group(1)
+        s = "-" + _comma_to_dot(paren_m.group(1))
+        return s
+    # European decimal comma: "1,23" → "1.23"
+    # Distinguish from thousands separator: comma followed by 1-2 digits = decimal
+    # (thousands separator always has exactly 3 digits after comma: "1,234")
+    eu_m = re.match(r"^(-?\d{1,3}),(\d{1,2})$", s)
+    if eu_m:
+        s = eu_m.group(1) + "." + eu_m.group(2)
     return s
 
 
@@ -881,8 +895,8 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
 
     # Step 2: collect year rows below the header
     year_data = {}  # {year: [float, ...]}
-    # Parenthetical negatives: (0.91)% or (0.91) → negative
-    _pct_pattern = re.compile(r'\((\d{1,3}\.\d{1,2})\)\s*%?|([+-]?\d{1,3}\.\d{1,2})\s*%?')
+    # Parenthetical negatives: (0.91)% or (0,91)% → negative; European commas: 1,82%
+    _pct_pattern = re.compile(r'\((\d{1,3}[.,]\d{1,2})\)\s*%?|([+-]?\d{1,3}[.,]\d{1,2})\s*%?')
 
     for line in lines[header_line_idx + 1:]:
         line_s = line.strip()
@@ -900,10 +914,10 @@ def _extract_calendar_text_format(text: str, diagnostics: dict):
         parsed = []
         for paren_val, std_val in values_raw:
             try:
-                if paren_val:  # parenthetical negative: (0.91) → -0.91
-                    f = -float(paren_val)
+                if paren_val:  # parenthetical negative: (0.91) or (0,91) → -0.91
+                    f = -float(_comma_to_dot(paren_val))
                 else:
-                    f = float(std_val)
+                    f = float(_comma_to_dot(std_val))
                 if -50 <= f <= 50:   # wider range for annual returns / YTD
                     parsed.append(f)
             except ValueError:
@@ -1019,11 +1033,11 @@ def _extract_summary_performance(text: str) -> dict:
         for j in range(search_start, search_end):
             line = lines[j]
             line_l = line.lower()
-            # Match parenthetical negatives and standard +/- format
-            pct_matches = re.findall(r"\((\d{1,3}\.\d{1,2})\)\s*%|([+-]?\d{1,3}\.\d{1,2})\s*%", line)
+            # Match parenthetical negatives, standard +/-, and European comma decimals
+            pct_matches = re.findall(r"\((\d{1,3}[.,]\d{1,2})\)\s*%|([+-]?\d{1,3}[.,]\d{1,2})\s*%", line)
             if not pct_matches:
                 continue
-            pcts = [-float(p) if p else float(s) for p, s in pct_matches]
+            pcts = [-float(_comma_to_dot(p)) if p else float(_comma_to_dot(s)) for p, s in pct_matches]
 
             # Prefer "net return" / "NAV" lines; accept any line with enough %s
             is_net = any(kw in line_l for kw in return_keywords)

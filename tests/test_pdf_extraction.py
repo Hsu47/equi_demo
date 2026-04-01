@@ -309,6 +309,57 @@ class TestFormatF:
         assert self.ext["method"] == "table"
 
 
+class TestFormatG:
+    """Format G: European decimal commas — 1,23% instead of 1.23%."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, ensure_test_pdfs):
+        self.gt = GROUND_TRUTH["format_g_european_decimals.pdf"]
+        self.result = _load_test_pdf("format_g_european_decimals.pdf")
+        self.ext = self.result["extraction"]
+
+    def test_returns_exact_match(self):
+        """European comma decimals must be correctly parsed to same values."""
+        expected = [r / 100 for r in self.gt["monthly_returns"]]
+        actual = self.result["raw_returns"]
+        assert len(actual) == 12, f"Expected 12 months, got {len(actual)}"
+        for i, (a, e) in enumerate(zip(actual, expected)):
+            assert abs(a - e) < 1e-6, f"Month {i+1}: {a} != {e}"
+
+    def test_no_months_silently_dropped(self):
+        """Critical: comma decimals must NOT cause months to be silently skipped."""
+        assert len(self.result["raw_returns"]) == 12
+        assert self.ext["rows_matched"] == 12
+        assert self.ext["rows_skipped"] == 0
+
+    def test_negative_returns_preserved(self):
+        """Parenthetical negatives with commas: (0,45)% must be negative."""
+        negative_indices = [i for i, r in enumerate(self.gt["monthly_returns"]) if r < 0]
+        assert len(negative_indices) >= 3
+        for i in negative_indices:
+            assert self.result["raw_returns"][i] < 0, (
+                f"Month {i+1} should be negative but got {self.result['raw_returns'][i]}"
+            )
+
+    def test_aum(self):
+        """European AUM format €580.000.000,00 must parse correctly."""
+        assert self.result["aum_mm"] == self.gt["aum_mm"]
+
+    def test_currency_is_eur(self):
+        assert self.result["currency"] == "EUR"
+
+    def test_confidence(self):
+        """High confidence — data is complete, just formatted differently."""
+        assert self.ext["confidence"] >= 0.90
+
+    def test_method(self):
+        assert self.ext["method"] == "table"
+
+    def test_fees(self):
+        assert self.result["mgmt_fee_pct"] == 1.0
+        assert self.result["incentive_fee_pct"] == 12.0
+
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 class TestEdgeCases:

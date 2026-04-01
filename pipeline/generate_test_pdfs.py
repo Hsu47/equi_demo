@@ -70,6 +70,12 @@ GROUND_TRUTH = {
         "currency": "EUR",
         "return_type": "net",
     },
+    "format_g_european_decimals.pdf": {
+        "monthly_returns": GT_MONTHLY,
+        "aum_mm": 580.0,
+        "currency": "EUR",
+        "return_type": "net",
+    },
 }
 
 
@@ -468,6 +474,70 @@ def build_format_f():
     print(f"  \u2713 Format F (EUR denominated): {path}")
 
 
+def build_format_g():
+    """
+    European decimal format fund — uses comma as decimal separator in returns.
+    Tests:
+    - Return values like "1,23%" instead of "1.23%"
+    - Parenthetical negatives with comma: (0,45)%
+    - EUR currency with European number formatting
+    - Parser must convert comma-decimals without silently dropping months
+    """
+    path = os.path.join(OUTPUT_DIR, "format_g_european_decimals.pdf")
+    doc = SimpleDocTemplate(path, pagesize=letter,
+                            rightMargin=0.6*inch, leftMargin=0.6*inch,
+                            topMargin=0.6*inch, bottomMargin=0.5*inch)
+    st = _styles()
+    story = []
+
+    story.append(Paragraph("Nordic Alpha Credit Fund LP", st["title"]))
+    story.append(Paragraph("Investor Report — December 2025", st["sub"]))
+    story.append(Paragraph("Nordea Fund Services (Stockholm)", st["sub"]))
+    story.append(Spacer(1, 0.15*inch))
+
+    # Fund overview with EUR currency
+    story.append(Paragraph("Fund Overview", st["section"]))
+    overview = [
+        ["Fund Currency:", "EUR"],
+        ["Net Assets (Ending NAV):", "\u20ac580.000.000,00"],
+        ["Strategy:", "Nordic Credit Opportunities"],
+        ["Inception:", "June 2019"],
+    ]
+    t = Table(overview, colWidths=[2.5*inch, 3.5*inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    # Monthly returns table with European decimal comma format
+    story.append(Paragraph("Monthly Net Return (%)", st["section"]))
+    header = ["Month", "Net Return (%)"]
+    rows = [header]
+    for i, r in enumerate(GT_MONTHLY):
+        month_name = f"{GT_MONTHS[i]} 2025"
+        # Format with European comma decimal: 1.23 → "1,23%", -0.45 → "(0,45)%"
+        if r < 0:
+            ret_str = f"({abs(r):.2f})%".replace(".", ",")
+        else:
+            ret_str = f"{r:.2f}%".replace(".", ",")
+        rows.append([month_name, ret_str])
+    t = Table(rows, colWidths=[2.5*inch, 2*inch])
+    t.setStyle(_table_style_basic())
+    story.append(t)
+    story.append(Spacer(1, 0.2*inch))
+
+    story.append(Paragraph(
+        "All figures are denominated in EUR. "
+        "Returns are net of management fees (1.0% p.a.) and performance fees (12%). "
+        "Decimal separator follows European convention (comma).",
+        st["disc"]))
+    doc.build(story)
+    print(f"  \u2713 Format G (European decimal commas): {path}")
+
+
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print("Generating test PDFs...")
@@ -477,6 +547,7 @@ def main():
     build_format_d()
     build_format_e()
     build_format_f()
+    build_format_g()
     print(f"\nGround truth for validation:")
     for name, gt in GROUND_TRUTH.items():
         print(f"  {name}: {len(gt['monthly_returns'])} months, AUM={gt.get('aum_mm')}")
