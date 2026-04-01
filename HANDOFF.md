@@ -671,3 +671,79 @@ LP 視角評估：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
 - **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
 - **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較（LP 最常問的問題之一）
+
+---
+
+## Iteration 10 — 2026-04-01
+
+### ARCHITECT
+第一性原理分析：LP 拿到 PDF 時最怕什麼？不是「解析失敗」（那至少知道有問題），而是「靜默丟失數據」。
+
+Iteration 9 加了多幣別偵測和 EUR AUM 解析，但漏了一個致命缺口：**歐洲格式的 return 值**。如果 return 用 `1,23%`（逗號當小數點），`float("1,23")` 會拋出 ValueError，該月被靜默跳過。LP 看到 8/12 個月的數據，不知道少了哪 4 個月 — 這比完全失敗更危險，因為他們會拿不完整的數據去做配置決策。
+
+影響範圍：
+- `_normalize_cell()` — table 解析路徑
+- `_RETURN_PATTERN` — text fallback 路徑
+- `_extract_calendar_text_format()` — calendar grid 路徑
+- `_extract_summary_performance()` — summary factsheet 路徑
+
+所有四個解析路徑都需要修。
+
+### DEV
+修改了 4 處核心解析邏輯：
+
+1. **`_comma_to_dot()` helper** — 新增簡單的逗號轉點號函數
+2. **`_RETURN_PATTERN` regex** — `\d{1,3}\.\d{1,4}` → `\d{1,3}[.,]\d{1,4}`，匹配兩種小數格式
+3. **`_normalize_cell()`** — 新增歐洲逗號小數判斷：`\d{1,3},\d{1,2}` → 視為小數（不是千位分隔）。區分邏輯：逗號後 1-2 位 = 小數點，逗號後 3 位 = 千位分隔符
+4. **`_extract_calendar_text_format()`** — 內部 `_pct_pattern` 也改用 `[.,]`
+5. **`_extract_summary_performance()`** — `findall` regex 同步更新
+
+新增測試 PDF（Format G — Nordic Alpha Credit Fund）：
+- 所有 return 值用歐洲格式：`1,23%`、`(0,45)%`
+- AUM 用歐洲格式：`€580.000.000,00`
+- 8 個新測試覆蓋：精確值匹配、無靜默丟月、負號保留、AUM 解析、幣別偵測
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**60/60 tests PASSED** (2.82 seconds)
+
+全格式測試結果：
+
+| PDF | Returns | AUM | Currency | Confidence | Method |
+|-----|---------|-----|----------|------------|--------|
+| sample_lp_report.pdf | 12/12 ✓ | 2.66 ✓ | USD ✓ | 1.0 | table |
+| format_a (AQR factsheet) | 12/12 ✓ | 850.0 ✓ | USD ✓ | 0.94 | calendar_text |
+| format_b (ambiguous headers) | 12/12 ✓ | 450.41 ✓ | USD ✓ | 1.0 | table |
+| format_c (gross + net cols) | 12/12 ✓ | 1200.0 ✓ | USD ✓ | 1.0 | table |
+| format_d (calendar grid) | 12/12 ✓ | 3200.0 ✓ | USD ✓ | 0.94 | calendar_text |
+| format_e (parenthetical neg) | 12/12 ✓ | 579.09 ✓ | USD ✓ | 1.0 | table |
+| format_f (EUR fund) | 12/12 ✓ | 725.0 ✓ | EUR ✓ | 0.99 | table |
+| **format_g (EUR decimal commas)** | **12/12 ✓** | **580.0 ✓** | **EUR ✓** | **0.99** | **table** |
+
+前後比較（歐洲小數格式 PDF 處理）：
+
+| | 舊行為 | 新行為 |
+|---|--------|--------|
+| `1,23%` return | float() ValueError → 月份被跳過 | 正確解析為 1.23% |
+| `(0,45)%` 負值 | ValueError → 月份被跳過 | 正確解析為 -0.45% |
+| 12 個月中 12 個用逗號 | 0/12 被解析 → 觸發 text fallback → 部分結果 | 12/12 全部正確 |
+| LP 看到的結果 | 不完整的 return 序列，不知道少了什麼 | 完整且準確的 12 個月 |
+
+LP 視角評估：
+- Brevan Howard（EUR）、Man GLG（EUR）、Comgest（EUR）等歐洲基金 → 全用逗號小數
+- 不再有「靜默丟月」風險 → trailing 12M 績效計算完整
+- 千位分隔符判斷邏輯正確：`1,234`（3 位 → 千位）vs `1,23`（2 位 → 小數）
+- confidence = 0.99 而非 1.0 是因為 EUR 幣別 warning（正確行為）
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**數字精度與四捨五入不一致**：
+- `float(clean) / 100.0` 產生的浮點誤差在累乘 NAV reconciliation 時可能放大
+- 但目前 delta 閾值是 5%，夠寬，短期不是問題
+
+更有 demo/production 價值的方向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **v2.5: Format Registry** — 記住 GP 格式指紋，下次同 GP 的 PDF 直接用上次成功的解析策略
+- **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較（LP 最常問的問題之一）
+- **多期間報告** — 支援 Q1-Q4 季報，自動拼接 trailing 12M
