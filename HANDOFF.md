@@ -435,3 +435,72 @@ LP 視角：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
 - **v2.5: Format Registry** — 記住 GP 格式指紋（production 價值高）
 - **自動化測試套件** — 把 5 種格式的驗證包成 pytest，CI 可跑
+
+---
+
+## Iteration 7 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：我們有 6 輪迭代的改進，5 種 PDF 格式，但**零自動化回歸測試**。
+
+每次迭代都是手動跑測試，容易漏掉。Iteration 6 的 YTD 汙染 bug 就是因為之前沒跑 Format D 才活了那麼久。更危險的是 Format B 的 NAV reconciliation 一直顯示 delta=7.24%、confidence=0.79——但這根本不是 parser 的問題，是測試 PDF 的 ground truth 自相矛盾（beginning NAV = ending NAV = $420M，但月回報加總 ≠ 0%）。
+
+如果沒有自動化測試：
+1. 未來改 parser 可能靜默破壞已修好的格式
+2. 假性 warning（如 Format B）會被誤認為「已知限制」，掩蓋真正的問題
+3. 新開發者無法驗證自己的修改是否安全
+
+**決策：自動化 pytest 測試套件 + 修復 Format B 測試資料**
+
+### DEV
+1. **修復 Format B 測試 PDF generator**：
+   - 舊：`Ending NAV = $420,000,000`（= Beginning NAV，與月回報矛盾）
+   - 新：`Ending NAV = Beginning NAV * compound(monthly_returns)` = $450,407,113
+   - Ground truth AUM 從 420.0 → 450.41（正確反映複利後淨值）
+   - return_type 從 "unknown" → "net"（PDF 有 "after all applicable fees" 文字）
+
+2. **建立 `tests/test_pdf_extraction.py`**：36 個測試案例
+   - `TestSamplePdf`（12 tests）：returns、AUM、NAV、fees、confidence、reconciliation、OCR、fund name
+   - `TestFormatA`（5 tests）：AQR 格式、calendar_text method
+   - `TestFormatB`（5 tests）：ambiguous headers、NAV reconciliation 現在通過
+   - `TestFormatC`（4 tests）：gross+net 並列、正確選 net column
+   - `TestFormatD`（5 tests）：trailing-12 邏輯、period label
+   - `TestEdgeCases`（5 tests）：不存在的檔案、decimal 格式、必要欄位
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**36/36 tests PASSED** (1.91 seconds)
+
+Format B 修復前後對比：
+
+| 指標 | 修復前 | 修復後 |
+|------|--------|--------|
+| Ending NAV | $420M（= Beginning NAV） | $450.41M（compound returns） |
+| NAV reconciliation delta | 7.24%（FAIL） | 0.0%（PASS） |
+| Confidence | 0.79 | 1.0 |
+| Warnings | "NAV reconciliation failed" | None |
+
+Sample PDF 回歸測試：
+- 12/12 月份全對（ground truth exact match）
+- AUM = 2.66 ✓
+- Confidence = 1.0 ✓
+- 所有 4 種測試格式 + 1 個 sample PDF 全部通過
+
+LP 視角評估：
+- 自動化測試是**信任的基礎設施**——LP 分析師不直接看測試結果，但知道「每次部署前都有 36 個自動化驗證」讓他們更信任系統
+- Format B 的假性 warning 被消除——之前的 delta=7.24% 會讓分析師懷疑所有 reconciliation 結果
+- `pytest tests/ -v` 一行指令即可驗證所有格式，新開發者可以安心修改 parser
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**LLM fallback（v2.6）**：
+- 我們現在有完整的 confidence 機制和自動化測試作為安全網
+- 當 confidence < 0.6 或 ocr_needed=true，與其給出不可靠的數據，直接送 Claude API
+- Claude 可以「看」圖片，處理掃描件，理解非標準格式
+- 這是 demo 的殺手級功能：「連看不懂的 PDF 都能處理」
+
+或者更基礎的方向：
+- **v2.5: Format Registry** — 記住已知格式指紋，對 production 系統有穩定性價值
+- **多幣別支援** — 目前只處理 USD，但真實 LP 報告可能是 EUR、GBP、JPY
+- **benchmark 提取** — 抓 benchmark return（S&P 500, HFRI），讓 LP 可以做相對績效比較
