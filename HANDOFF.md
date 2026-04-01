@@ -671,3 +671,81 @@ LP 視角評估：
 - **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
 - **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
 - **benchmark 提取** — 抓 S&P 500/HFRI 做相對績效比較（LP 最常問的問題之一）
+
+---
+
+## Iteration 10 — 2026-04-01
+
+### ARCHITECT
+第一性原理問題：LP 拿到一份 PDF 時，除了月報酬之外最想知道什麼？
+
+答案：**風險指標**。LP 投資委員會做配置決策時，Sharpe ratio、max drawdown、benchmark correlation 的重要性 ≥ 原始報酬。目前 sample PDF 的 page 2 有完整的風險指標區塊（annualized return、volatility、Sharpe、Sortino、max drawdown、correlation/beta to S&P 500），但我們完全忽略了這些數據。
+
+這是「silent data loss」而非「silent error」——數據就在 PDF 裡，parser 看到了文字但沒提取。更重要的是：
+1. **Cross-validation 機會**：PDF 裡的 annualized return 可以反算驗證我們的月度複利計算——如果兩者不一致，代表提取有問題
+2. **LP 決策直接用到**：CalPERS alts team 做 fund comparison 主要看 Sharpe ratio、drawdown、correlation
+3. **Demo 說服力**：一份 PDF 上傳後不只看到 12 個月報酬，還有完整的風險概覽 → 這才是「取代手動整理」的價值
+
+### DEV
+新增兩個函數：
+
+1. **`_extract_risk_metrics(text)`**：從 LP 報告文字中提取 7 種風險指標
+   - annualized_return（%）、annualized_volatility（%）
+   - sharpe_ratio、sortino_ratio、calmar_ratio（raw float）
+   - max_drawdown（%）
+   - benchmark_correlation、benchmark_beta、benchmark_name
+   - Sharpe regex 特別處理 `(Rf = 5.0%)` 括號內的 risk-free rate 參數，避免誤匹配
+
+2. **`_cross_validate_annualized_return(monthly_returns, stated_annual)`**：
+   - 把 12 個月報酬複利計算，比對 PDF 裡聲稱的年化報酬
+   - delta < 1.0 pp → validated = True
+   - 如果不一致 → 自動產生 warning，降低 LP 對提取數據的信任
+
+3. **輸出結構變更**：
+   - Top-level 新增 `risk_metrics` dict（7 個指標 + benchmark info）
+   - `extraction` 新增 `annualized_return_check`（cross-validation 結果）
+
+4. **新增 4 個測試**：56 個測試案例（原 52 + 4 新增）
+
+### QA（LP 投資人視角 — CalPERS alts team）
+
+**56/56 tests PASSED** (2.69 seconds)
+
+Sample PDF 風險指標提取結果：
+
+| Metric | Extracted | Ground Truth | Match |
+|--------|-----------|-------------|-------|
+| Annualized Return | 10.64% | 10.64% | ✓ |
+| Annualized Volatility | 6.82% | 6.82% | ✓ |
+| Sharpe Ratio | 0.82 | 0.82 | ✓ |
+| Max Drawdown | -2.17% | -2.17% | ✓ |
+| Sortino Ratio | 1.44 | 1.44 | ✓ |
+| Benchmark Correlation (S&P) | -0.12 | -0.12 | ✓ |
+| Benchmark Beta (S&P) | 0.04 | 0.04 | ✓ |
+
+Cross-validation 結果：
+- Stated annualized return: 10.64%
+- Computed from monthly: 10.72%
+- Delta: 0.08 pp → **VALIDATED** ✓
+- 差異來自 management fee + incentive allocation 的精確時間點
+
+回歸測試：所有 7 種 PDF 格式（sample + A-F）完全不受影響
+
+LP 視角評估：
+- 分析師上傳一份 PDF 後看到完整的風險概覽，不再只有 12 個數字
+- Sharpe 0.82 + correlation -0.12 → 立即知道這基金提供 low-correlation alpha
+- Cross-validation 通過 → 月報酬和年化報酬一致，數據可信
+- 如果某份 PDF 的 cross-validation 失敗（delta > 1pp），分析師立即知道「提取可能有問題」
+
+### Next
+下一輪最危險的靜默錯誤是什麼？
+
+**`_find_beginning_nav()` 不支援多幣別**：
+- `_find_aum()` 已經支援 € £ ¥ 和 ISO codes（Iteration 9），但 `_find_beginning_nav()` 還只認 `$` 和 `USD`
+- EUR 基金 → beginning NAV = None → 無法做 NAV reconciliation → 關鍵的信任驗證功能靜默消失
+- 這不是「錯誤數據」，而是「驗證機制的靜默失效」——可能更危險
+
+或者更有 demo 價值的方向：
+- **v2.6: LLM fallback** — 低信心 PDF 送 Claude API（demo 殺手級功能）
+- **v2.5: Format Registry** — 記住 GP 格式指紋（production 穩定性）
+- **歐洲小數 return 格式** — `1,23%` 逗號小數的月報酬解析
